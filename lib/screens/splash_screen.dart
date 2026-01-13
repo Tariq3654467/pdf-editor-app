@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:image_picker/image_picker.dart';
 import '../painters/pdf_icon_painter.dart';
+import 'tools_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -48,93 +50,153 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.white,
-      body: Center(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // PDF Icon with custom design
-              Container(
-                width: 120,
-                height: 120,
+      body: Stack(
+        children: [
+          // Decorative pink curves - Top
+          Positioned(
+            top: -50,
+            right: -30,
+            child: Container(
+              width: 300,
+              height: 300,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFFE0E6),
+              ),
+            ),
+          ),
+          // Decorative pink curves - Bottom
+          Positioned(
+            bottom: -100,
+            left: -80,
+            child: Container(
+              width: 400,
+              height: 400,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFFE0E6),
+              ),
+            ),
+          ),
+          // Decorative pink circle - Bottom right
+          Positioned(
+            bottom: 100,
+            right: -30,
+            child: Container(
+              width: 150,
+              height: 150,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: const Color(0xFFFFCDD2),
+              ),
+            ),
+          ),
+          // Decorative small square - Top right
+          Positioned(
+            top: 100,
+            right: 50,
+            child: Transform.rotate(
+              angle: 0.3,
+              child: Container(
+                width: 40,
+                height: 40,
                 decoration: BoxDecoration(
-                  color: const Color(0xFFE53935),
-                  borderRadius: BorderRadius.circular(30),
-                ),
-                child: Stack(
-                  alignment: Alignment.center,
-                  children: [
-                    // PDF Icon Background
-                    Container(
-                      width: 100,
-                      height: 100,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE53935),
-                        borderRadius: BorderRadius.circular(20),
-                      ),
-                      child: CustomPaint(
-                        painter: PDFIconPainter(),
-                      ),
-                    ),
-                    // Green checkmark overlay
-                    Positioned(
-                      bottom: 5,
-                      right: 5,
-                      child: Container(
-                        width: 32,
-                        height: 32,
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF66BB6A),
-                          borderRadius: BorderRadius.circular(50),
-                        ),
-                        child: const Icon(
-                          Icons.check,
-                          color: Colors.white,
-                          size: 20,
-                        ),
-                      ),
-                    ),
-                  ],
+                  color: const Color(0xFFFFCDD2),
+                  borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              const SizedBox(height: 40),
-              // App Title
-              const Text(
-                'PDF Reader',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF263238),
-                ),
-              ),
-              const SizedBox(height: 50),
-              // Progress Bar
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 60),
-                child: AnimatedBuilder(
-                  animation: _progressAnimation,
-                  builder: (context, child) {
-                    return Column(
+            ),
+          ),
+          // Main content
+          Center(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // PDF Icon with custom design
+                  Container(
+                    width: 120,
+                    height: 120,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFE53935),
+                      borderRadius: BorderRadius.circular(30),
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
                       children: [
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: LinearProgressIndicator(
-                            value: _progressAnimation.value,
-                            minHeight: 6,
-                            backgroundColor: const Color(0xFFE0E0E0),
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                              Color(0xFFE53935),
+                        // PDF Icon Background
+                        Container(
+                          width: 100,
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE53935),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: CustomPaint(
+                            painter: PDFIconPainter(),
+                          ),
+                        ),
+                        // Green checkmark overlay
+                        Positioned(
+                          bottom: 5,
+                          right: 5,
+                          child: Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF66BB6A),
+                              borderRadius: BorderRadius.circular(50),
+                            ),
+                            child: const Icon(
+                              Icons.check,
+                              color: Colors.white,
+                              size: 20,
                             ),
                           ),
                         ),
                       ],
-                    );
-                  },
-                ),
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  // App Title
+                  const Text(
+                    'PDF Reader',
+                    style: TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: Color(0xFF263238),
+                    ),
+                  ),
+                  const SizedBox(height: 50),
+                  // Progress Bar
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 60),
+                    child: AnimatedBuilder(
+                      animation: _progressAnimation,
+                      builder: (context, child) {
+                        return Column(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(10),
+                              child: LinearProgressIndicator(
+                                value: _progressAnimation.value,
+                                minHeight: 6,
+                                backgroundColor: const Color(0xFFE0E0E0),
+                                valueColor: const AlwaysStoppedAnimation<Color>(
+                                  Color(0xFFE53935),
+                                ),
+                              ),
+                            ),
+                          ],
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
@@ -152,6 +214,7 @@ class MyHomePage extends StatefulWidget {
 class _MyHomePageState extends State<MyHomePage> {
   int _selectedTabIndex = 0;
   int _selectedBottomNavIndex = 0;
+  final ImagePicker _imagePicker = ImagePicker();
 
   // Sample PDF files data
   final List<PDFFile> pdfFiles = [
@@ -193,6 +256,35 @@ class _MyHomePageState extends State<MyHomePage> {
     ),
   ];
 
+  Future<void> _openCamera() async {
+    try {
+      final XFile? photo = await _imagePicker.pickImage(
+        source: ImageSource.camera,
+        imageQuality: 90,
+      );
+      
+      if (photo != null) {
+        print('Photo captured: ${photo.path}');
+        // You can process the captured image here
+        // Convert to PDF or save it
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Photo captured: ${photo.name}'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error opening camera: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Camera not available on web. Use Android/iOS app'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -215,9 +307,9 @@ class _MyHomePageState extends State<MyHomePage> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
-                      'PDF Reader',
-                      style: TextStyle(
+                    Text(
+                      _selectedBottomNavIndex == 0 ? 'PDF Reader' : 'Tools',
+                      style: const TextStyle(
                         color: Colors.white,
                         fontSize: 28,
                         fontWeight: FontWeight.bold,
@@ -246,73 +338,9 @@ class _MyHomePageState extends State<MyHomePage> {
           Expanded(
             child: Container(
               color: const Color(0xFFF5F5F5),
-              child: Column(
-                children: [
-                  // Tabs
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 16,
-                    ),
-                    child: Row(
-                      children: [
-                        _buildTab('My file', 0),
-                        const SizedBox(width: 20),
-                        _buildTab('Recent', 1),
-                        const SizedBox(width: 20),
-                        _buildTab('Bookmarks', 2),
-                      ],
-                    ),
-                  ),
-                  // Document Count and Actions
-                  Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 8,
-                    ),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          '116 Documents',
-                          style: TextStyle(
-                            color: Color(0xFF263238),
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        Row(
-                          children: [
-                            IconButton(
-                              onPressed: () {},
-                              icon: const Icon(Icons.search,
-                                  color: Color(0xFF757575)),
-                            ),
-                            IconButton(
-                              onPressed: () {},
-                              icon: const Icon(Icons.tune,
-                                  color: Color(0xFF757575)),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  ),
-                  // PDF List
-                  Expanded(
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      itemCount: pdfFiles.length,
-                      itemBuilder: (context, index) {
-                        return _buildPDFTile(pdfFiles[index]);
-                      },
-                    ),
-                  ),
-                ],
-              ),
+              child: _selectedBottomNavIndex == 0
+                  ? _buildHomeContent()
+                  : const ToolsScreen(),
             ),
           ),
         ],
@@ -332,64 +360,75 @@ class _MyHomePageState extends State<MyHomePage> {
           color: Colors.white,
           shape: const CircularNotchedRectangle(),
           notchMargin: 8.0,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              // Home
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      onPressed: () {
+          child: SizedBox(
+            height: 60,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Home
+                Expanded(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
                         setState(() => _selectedBottomNavIndex = 0);
                       },
-                      icon: const Icon(Icons.home,
-                          color: Color(0xFFE53935), size: 24),
-                    ),
-                    const Text(
-                      'Home',
-                      style: TextStyle(
-                        color: Color(0xFFE53935),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.home,
+                              color: Color(0xFFE53935), size: 24),
+                          SizedBox(height: 2),
+                          Text(
+                            'Home',
+                            style: TextStyle(
+                              color: Color(0xFFE53935),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ),
-              // Tools
-              Expanded(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      onPressed: () {
+                // Tools
+                Expanded(
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: () {
                         setState(() => _selectedBottomNavIndex = 1);
                       },
-                      icon: const Icon(Icons.dashboard,
-                          color: Color(0xFFBDBDBD), size: 24),
-                    ),
-                    const Text(
-                      'Tools',
-                      style: TextStyle(
-                        color: Color(0xFFBDBDBD),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.dashboard,
+                              color: Color(0xFFBDBDBD), size: 24),
+                          SizedBox(height: 2),
+                          Text(
+                            'Tools',
+                            style: TextStyle(
+                              color: Color(0xFFBDBDBD),
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                  ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFFE53935),
         shape: const CircleBorder(),
-        onPressed: () {},
-        child: const Icon(Icons.add_rounded, color: Colors.white, size: 32),
+        onPressed: _openCamera,
+        child: const Icon(Icons.document_scanner, color: Colors.white, size: 32),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
@@ -417,6 +456,76 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ),
       ),
+    );
+  }
+
+  Widget _buildHomeContent() {
+    return Column(
+      children: [
+        // Tabs
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 16,
+          ),
+          child: Row(
+            children: [
+              _buildTab('My file', 0),
+              const SizedBox(width: 20),
+              _buildTab('Recent', 1),
+              const SizedBox(width: 20),
+              _buildTab('Bookmarks', 2),
+            ],
+          ),
+        ),
+        // Document Count and Actions
+        Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 20,
+            vertical: 8,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
+                '116 Documents',
+                style: TextStyle(
+                  color: Color(0xFF263238),
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    onPressed: () {},
+                    icon: const Icon(Icons.search,
+                        color: Color(0xFF757575)),
+                  ),
+                  IconButton(
+                    onPressed: () {},
+                    icon: const Icon(Icons.tune,
+                        color: Color(0xFF757575)),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+        // PDF List
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.symmetric(
+              horizontal: 16,
+              vertical: 8,
+            ),
+            itemCount: pdfFiles.length,
+            itemBuilder: (context, index) {
+              return _buildPDFTile(pdfFiles[index]);
+            },
+          ),
+        ),
+      ],
     );
   }
 

@@ -1,85 +1,133 @@
 import 'package:flutter/material.dart';
+import '../painters/tool_icons_painter.dart';
 
 class ToolsScreen extends StatelessWidget {
   const ToolsScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
-    final tools = [
-      {
-        'icon': Icons.qr_code_scanner,
-        'title': 'Scan to PDF',
-        'color': const Color(0xFFB2E7D9),
-      },
-      {
-        'icon': Icons.image,
-        'title': 'Image to PDF',
-        'color': const Color(0xFFFFD9B3),
-      },
-      {
-        'icon': Icons.cut,
-        'title': 'Split PDF',
-        'color': const Color(0xFFE8B4E1),
-      },
-      {
-        'icon': Icons.merge,
-        'title': 'Merge PDF',
-        'color': const Color(0xFFB3E5B3),
-      },
-      {
-        'icon': Icons.edit,
-        'title': 'Annotate',
-        'color': const Color(0xFFD9D4E8),
-      },
-      {
-        'icon': Icons.compress,
-        'title': 'Compress PDF',
-        'color': const Color(0xFFFFCDD2),
-      },
-      {
-        'icon': Icons.folder_zip,
-        'title': 'Create a ZIP file',
-        'color': const Color(0xFFFFE8B3),
-      },
-      {
-        'icon': Icons.print,
-        'title': 'Print',
-        'color': const Color(0xFFB3D9FF),
-      },
-    ];
-
-    return ListView(
-      children: [
-        GridView.builder(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 16,
-            childAspectRatio: 0.95,
-          ),
-          itemCount: tools.length,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          itemBuilder: (context, index) {
-            final tool = tools[index] as Map<String, dynamic>;
-            return _buildToolCard(
-              context,
-              icon: tool['icon'] as IconData,
-              title: tool['title'] as String,
-              backgroundColor: tool['color'] as Color,
-            );
-          },
+    return Container(
+      decoration: const BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.only(
+          topLeft: Radius.circular(20),
+          topRight: Radius.circular(20),
         ),
-      ],
+      ),
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        children: [
+          // First row of tools
+          Row(
+            children: [
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Scan to PDF',
+                  backgroundColor: const Color(0xFFB2E7D9),
+                  iconColor: const Color(0xFF4CAF50),
+                  painter: ScanToPDFPainter(color: const Color(0xFF4CAF50)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Image to PDF',
+                  backgroundColor: const Color(0xFFFFD9B3),
+                  iconColor: const Color(0xFFFF9800),
+                  painter: ImageToPDFPainter(color: const Color(0xFFFF9800)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Second row of tools
+          Row(
+            children: [
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Split PDF',
+                  backgroundColor: const Color(0xFFE8B4E1),
+                  iconColor: const Color(0xFF9C27B0),
+                  painter: SplitPDFPainter(color: const Color(0xFF9C27B0)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Merge PDF',
+                  backgroundColor: const Color(0xFFB3E5B3),
+                  iconColor: const Color(0xFF4CAF50),
+                  painter: MergePDFPainter(color: const Color(0xFF4CAF50)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Third row of tools
+          Row(
+            children: [
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Annotate',
+                  backgroundColor: const Color(0xFFD9D4E8),
+                  iconColor: const Color(0xFF9C27B0),
+                  painter: AnnotatePainter(color: const Color(0xFF9C27B0)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Compress PDF',
+                  backgroundColor: const Color(0xFFFFCDD2),
+                  iconColor: const Color(0xFFE53935),
+                  painter: CompressPDFPainter(color: const Color(0xFFE53935)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          // Fourth row of tools
+          Row(
+            children: [
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Create a ZIP file',
+                  backgroundColor: const Color(0xFFFFE8B3),
+                  iconColor: const Color(0xFFFFC107),
+                  painter: CreateZIPPainter(color: const Color(0xFFFFC107)),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _buildToolCard(
+                  context,
+                  title: 'Print',
+                  backgroundColor: const Color(0xFFB3D9FF),
+                  iconColor: const Color(0xFF2196F3),
+                  painter: PrintPainter(color: const Color(0xFF2196F3)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+        ],
+      ),
     );
   }
 
   Widget _buildToolCard(
     BuildContext context, {
-    required IconData icon,
     required String title,
     required Color backgroundColor,
+    required Color iconColor,
+    required CustomPainter painter,
   }) {
     return GestureDetector(
       onTap: () {
@@ -91,6 +139,7 @@ class ToolsScreen extends StatelessWidget {
         );
       },
       child: Container(
+        padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -112,23 +161,18 @@ class ToolsScreen extends StatelessWidget {
                 color: backgroundColor,
                 borderRadius: BorderRadius.circular(16),
               ),
-              child: Icon(
-                icon,
-                color: Colors.white,
-                size: 36,
+              child: CustomPaint(
+                painter: painter,
               ),
             ),
             const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              child: Text(
-                title,
-                textAlign: TextAlign.center,
-                style: const TextStyle(
-                  color: Color(0xFF263238),
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                ),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                color: Color(0xFF263238),
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ],
@@ -136,4 +180,5 @@ class ToolsScreen extends StatelessWidget {
       ),
     );
   }
+
 }

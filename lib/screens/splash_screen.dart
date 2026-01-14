@@ -375,12 +375,18 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F5F5),
+      backgroundColor: const Color(0xFFE53935),
       body: Column(
         children: [
-          // Red Header
+          // Red Header with rounded bottom corners
           Container(
-            color: const Color(0xFFE53935),
+            decoration: const BoxDecoration(
+              color: Color(0xFFE53935),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(20),
+                bottomRight: Radius.circular(20),
+              ),
+            ),
             padding: EdgeInsets.only(
               top: MediaQuery.of(context).padding.top,
               left: 20,
@@ -421,10 +427,16 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
           ),
-          // Content
+          // Content with rounded top corners
           Expanded(
             child: Container(
-              color: const Color(0xFFF5F5F5),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.only(
+                  topLeft: Radius.circular(20),
+                  topRight: Radius.circular(20),
+                ),
+              ),
               child: _selectedBottomNavIndex == 0
                   ? _buildHomeContent()
                   : const ToolsScreen(),
@@ -435,6 +447,7 @@ class _MyHomePageState extends State<MyHomePage> {
       // Bottom Navigation
       bottomNavigationBar: Container(
         decoration: BoxDecoration(
+          color: Colors.white,
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.1),
@@ -460,16 +473,23 @@ class _MyHomePageState extends State<MyHomePage> {
                       onTap: () {
                         setState(() => _selectedBottomNavIndex = 0);
                       },
-                      child: const Column(
+                      child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.home,
-                              color: Color(0xFFE53935), size: 24),
-                          SizedBox(height: 2),
+                          Icon(
+                            Icons.home_outlined,
+                            color: _selectedBottomNavIndex == 0
+                                ? const Color(0xFFE53935)
+                                : const Color(0xFFBDBDBD),
+                            size: 24,
+                          ),
+                          const SizedBox(height: 2),
                           Text(
                             'Home',
                             style: TextStyle(
-                              color: Color(0xFFE53935),
+                              color: _selectedBottomNavIndex == 0
+                                  ? const Color(0xFFE53935)
+                                  : const Color(0xFFBDBDBD),
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -487,16 +507,19 @@ class _MyHomePageState extends State<MyHomePage> {
                       onTap: () {
                         setState(() => _selectedBottomNavIndex = 1);
                       },
-                      child: const Column(
+                      child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Icon(Icons.dashboard,
-                              color: Color(0xFFBDBDBD), size: 24),
-                          SizedBox(height: 2),
+                          _buildToolsIcon(
+                            isActive: _selectedBottomNavIndex == 1,
+                          ),
+                          const SizedBox(height: 2),
                           Text(
                             'Tools',
                             style: TextStyle(
-                              color: Color(0xFFBDBDBD),
+                              color: _selectedBottomNavIndex == 1
+                                  ? const Color(0xFFE53935)
+                                  : const Color(0xFFBDBDBD),
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -515,9 +538,90 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: const Color(0xFFE53935),
         shape: const CircleBorder(),
         onPressed: _openCamera,
-        child: const Icon(Icons.document_scanner, color: Colors.white, size: 32),
+        child: Container(
+          width: 32,
+          height: 32,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(6),
+          ),
+          child: const Icon(
+            Icons.document_scanner,
+            color: Color(0xFFE53935),
+            size: 20,
+          ),
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+    );
+  }
+
+  Widget _buildToolsIcon({required bool isActive}) {
+    final color = isActive ? const Color(0xFFE53935) : const Color(0xFFBDBDBD);
+    final plusColor = isActive ? const Color(0xFFE53935) : const Color(0xFFBDBDBD);
+    return SizedBox(
+      width: 24,
+      height: 24,
+      child: Stack(
+        children: [
+          // Grid of 4 squares
+          Positioned(
+            left: 0,
+            top: 0,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                border: Border.all(color: color, width: 1.5),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            top: 0,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                border: Border.all(color: color, width: 1.5),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: Center(
+                child: Icon(
+                  Icons.add,
+                  size: 8,
+                  color: plusColor,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            bottom: 0,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                border: Border.all(color: color, width: 1.5),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: Container(
+              width: 10,
+              height: 10,
+              decoration: BoxDecoration(
+                border: Border.all(color: color, width: 1.5),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -547,8 +651,10 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildHomeContent() {
-    return Column(
-      children: [
+    return Container(
+      color: Colors.white,
+      child: Column(
+        children: [
         // Tabs
         Padding(
           padding: const EdgeInsets.symmetric(
@@ -613,6 +719,7 @@ class _MyHomePageState extends State<MyHomePage> {
           ),
         ),
       ],
+      ),
     );
   }
 

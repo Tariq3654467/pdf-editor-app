@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
@@ -134,7 +135,8 @@ class PDFToolsService {
         
         // Create template from source page and draw it on new page
         final template = sourcePage.createTemplate();
-        newPage.graphics.drawPdfTemplate(template, const sf.Offset(0, 0));
+        final pageSize = sourcePage.size;
+        newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
 
         final fileName = '${baseName}_page_${i + 1}.pdf';
         final splitPath = '${pdfDirectory.path}/$fileName';
@@ -173,7 +175,8 @@ class PDFToolsService {
           final newPage = mergedPdf.pages.add();
           // Create template from source page and draw it on new page
           final template = sourcePage.createTemplate();
-          newPage.graphics.drawPdfTemplate(template, const sf.Offset(0, 0));
+          final pageSize = sourcePage.size;
+          newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
         }
 
         pdf.dispose();
@@ -222,7 +225,8 @@ class PDFToolsService {
         final newPage = compressedPdf.pages.add();
         // Create template from source page and draw it on new page
         final template = sourcePage.createTemplate();
-        newPage.graphics.drawPdfTemplate(template, const sf.Offset(0, 0));
+        final pageSize = sourcePage.size;
+        newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
       }
 
       // Save compressed PDF

@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
+import '../services/pdf_tools_service.dart';
 import '../models/pdf_file.dart';
 import 'pdf_viewer_screen.dart';
 
@@ -348,24 +349,62 @@ class _MyHomePageState extends State<MyHomePage> {
       );
       
       if (photo != null) {
-        print('Photo captured: ${photo.path}');
-        // You can process the captured image here
-        // Convert to PDF or save it
+        // Show loading indicator
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => const Center(
+              child: CircularProgressIndicator(),
+            ),
+          );
+        }
+
+        // Convert image to PDF
+        final pdfPath = await PDFToolsService.scanToPDF(photo.path);
+        
+        if (mounted) {
+          Navigator.of(context).pop(); // Close loading dialog
+          
+          if (pdfPath != null) {
+            // Open PDF in viewer
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (context) => PDFViewerScreen(
+                  filePath: pdfPath,
+                  fileName: 'Scanned Document.pdf',
+                ),
+              ),
+            );
+            // Reload PDF list
+            _loadPDFs();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('PDF created successfully'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          } else {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Error creating PDF from image'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.of(context).pop(); // Close loading dialog if open
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Photo captured: ${photo.name}'),
+            content: Text('Camera error: ${e.toString()}'),
             duration: const Duration(seconds: 2),
           ),
         );
       }
-    } catch (e) {
       print('Error opening camera: $e');
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Camera not available on web. Use Android/iOS app'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
     }
   }
 
@@ -534,7 +573,7 @@ class _MyHomePageState extends State<MyHomePage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFFE53935),
         shape: const CircleBorder(),
-        onPressed: _pickAndAddPDF,
+        onPressed: _openCamera,
         child: Container(
           width: 32,
           height: 32,

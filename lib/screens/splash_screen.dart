@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:image_picker/image_picker.dart';
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
+import '../services/pdf_service.dart';
+import '../models/pdf_file.dart';
+import 'pdf_viewer_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -302,46 +305,40 @@ class _MyHomePageState extends State<MyHomePage> {
   int _selectedTabIndex = 0;
   int _selectedBottomNavIndex = 0;
   final ImagePicker _imagePicker = ImagePicker();
+  List<PDFFile> pdfFiles = [];
+  bool _isLoading = true;
 
-  // Sample PDF files data
-  final List<PDFFile> pdfFiles = [
-    PDFFile(
-      name: 'CS106-F25-01-Sectio...',
-      date: '01/10/2026 21:34',
-      size: '155.5 KB',
-      isFavorite: false,
-    ),
-    PDFFile(
-      name: 'CS250-F25-01-Sectio...',
-      date: '01/10/2026 16:47',
-      size: '278.5 KB',
-      isFavorite: false,
-    ),
-    PDFFile(
-      name: 'PDF_Merged_202601...',
-      date: '01/10/2026 16:45',
-      size: '439.6 KB',
-      isFavorite: false,
-    ),
-    PDFFile(
-      name: 'Crypto Arbitrage Bot ...',
-      date: '01/10/2026 16:42',
-      size: '335.2 KB',
-      isFavorite: false,
-    ),
-    PDFFile(
-      name: 'CS106-F25-01-Sectio...',
-      date: '01/10/2026 16:10',
-      size: '153.6 KB',
-      isFavorite: false,
-    ),
-    PDFFile(
-      name: 'combination and per...',
-      date: '01/06/2026 07:31',
-      size: '255.7 KB',
-      isFavorite: false,
-    ),
-  ];
+  @override
+  void initState() {
+    super.initState();
+    _loadPDFs();
+  }
+
+  Future<void> _loadPDFs() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    final loadedPDFs = await PDFService.loadPDFsFromDevice();
+    
+    setState(() {
+      pdfFiles = loadedPDFs;
+      _isLoading = false;
+    });
+  }
+
+  Future<void> _pickAndAddPDF() async {
+    final filePath = await PDFService.pickPDFFile();
+    if (filePath != null) {
+      _loadPDFs(); // Reload the list
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('PDF added successfully'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    }
+  }
 
   Future<void> _openCamera() async {
     try {
@@ -537,7 +534,7 @@ class _MyHomePageState extends State<MyHomePage> {
       floatingActionButton: FloatingActionButton(
         backgroundColor: const Color(0xFFE53935),
         shape: const CircleBorder(),
-        onPressed: _openCamera,
+        onPressed: _pickAndAddPDF,
         child: Container(
           width: 32,
           height: 32,
@@ -691,14 +688,24 @@ class _MyHomePageState extends State<MyHomePage> {
               Row(
                 children: [
                   IconButton(
-                    onPressed: () {},
+                    onPressed: () {
+                      // Search functionality
+                    },
                     icon: const Icon(Icons.search,
                         color: Color(0xFF757575)),
                   ),
                   IconButton(
-                    onPressed: () {},
+                    onPressed: () {
+                      // Filter/Sort functionality
+                    },
                     icon: const Icon(Icons.tune,
                         color: Color(0xFF757575)),
+                  ),
+                  IconButton(
+                    onPressed: _pickAndAddPDF,
+                    icon: const Icon(Icons.add,
+                        color: Color(0xFF757575)),
+                    tooltip: 'Add PDF',
                   ),
                 ],
               ),
@@ -707,16 +714,50 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
         // PDF List
         Expanded(
-          child: ListView.builder(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 8,
-            ),
-            itemCount: pdfFiles.length,
-            itemBuilder: (context, index) {
-              return _buildPDFTile(pdfFiles[index]);
-            },
-          ),
+          child: _isLoading
+              ? const Center(child: CircularProgressIndicator())
+              : pdfFiles.isEmpty
+                  ? Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.description_outlined,
+                            size: 64,
+                            color: Color(0xFFBDBDBD),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'No PDFs found',
+                            style: TextStyle(
+                              color: Color(0xFF9E9E9E),
+                              fontSize: 16,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            onPressed: _pickAndAddPDF,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFE53935),
+                            ),
+                            child: const Text(
+                              'Add PDF',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : ListView.builder(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 8,
+                      ),
+                      itemCount: pdfFiles.length,
+                      itemBuilder: (context, index) {
+                        return _buildPDFTile(pdfFiles[index]);
+                      },
+                    ),
         ),
       ],
       ),
@@ -724,87 +765,93 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildPDFTile(PDFFile pdf) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: ListTile(
-        contentPadding: const EdgeInsets.all(12),
-        leading: Container(
-          width: 50,
-          height: 50,
-          decoration: BoxDecoration(
-            color: const Color(0xFFE53935),
-            borderRadius: BorderRadius.circular(8),
-          ),
-          child: const Center(
-            child: Text(
-              'PDF',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-                fontSize: 12,
+    return GestureDetector(
+      onTap: () {
+        if (pdf.filePath != null) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PDFViewerScreen(
+                filePath: pdf.filePath!,
+                fileName: pdf.name,
+              ),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF file path not available'),
+            ),
+          );
+        }
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.all(12),
+          leading: Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE53935),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Center(
+              child: Text(
+                'PDF',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
+                ),
               ),
             ),
           ),
-        ),
-        title: Text(
-          pdf.name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            color: Color(0xFF263238),
-            fontSize: 14,
-            fontWeight: FontWeight.w500,
+          title: Text(
+            pdf.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF263238),
+              fontSize: 14,
+              fontWeight: FontWeight.w500,
+            ),
           ),
-        ),
-        subtitle: Text(
-          '${pdf.date} • ${pdf.size}',
-          style: const TextStyle(
-            color: Color(0xFF9E9E9E),
-            fontSize: 12,
+          subtitle: Text(
+            '${pdf.date} • ${pdf.size}',
+            style: const TextStyle(
+              color: Color(0xFF9E9E9E),
+              fontSize: 12,
+            ),
           ),
-        ),
-        trailing: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            IconButton(
-              onPressed: () {
-                setState(() {
-                  pdfFiles[pdfFiles.indexOf(pdf)].isFavorite =
-                      !pdfFiles[pdfFiles.indexOf(pdf)].isFavorite;
-                });
-              },
-              icon: Icon(
-                pdf.isFavorite ? Icons.star : Icons.star_outline,
-                color: const Color(0xFFE53935),
-                size: 20,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                onPressed: () {
+                  setState(() {
+                    pdfFiles[pdfFiles.indexOf(pdf)].isFavorite =
+                        !pdfFiles[pdfFiles.indexOf(pdf)].isFavorite;
+                  });
+                },
+                icon: Icon(
+                  pdf.isFavorite ? Icons.star : Icons.star_outline,
+                  color: const Color(0xFFE53935),
+                  size: 20,
+                ),
               ),
-            ),
-            IconButton(
-              onPressed: () {},
-              icon: const Icon(Icons.more_vert,
-                  color: Color(0xFFBDBDBD), size: 20),
-            ),
-          ],
+              IconButton(
+                onPressed: () {},
+                icon: const Icon(Icons.more_vert,
+                    color: Color(0xFFBDBDBD), size: 20),
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
-}
-
-class PDFFile {
-  String name;
-  String date;
-  String size;
-  bool isFavorite;
-
-  PDFFile({
-    required this.name,
-    required this.date,
-    required this.size,
-    required this.isFavorite,
-  });
 }

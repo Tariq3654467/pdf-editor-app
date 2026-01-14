@@ -52,154 +52,241 @@ class _SplashScreenState extends State<SplashScreen>
       backgroundColor: Colors.white,
       body: Stack(
         children: [
-          // Decorative pink curves - Top
+          // Top Left - Large light pink circle (partially visible)
           Positioned(
-            top: -50,
-            right: -30,
+            top: -100,
+            left: -100,
             child: Container(
               width: 300,
               height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFFFE0E6),
+                color: const Color(0xFFFFE0E6).withOpacity(0.6),
               ),
             ),
           ),
-          // Decorative pink curves - Bottom
+          // Top - Light red curved line from top-left sweeping right
           Positioned(
-            bottom: -100,
-            left: -80,
+            top: 50,
+            left: 20,
+            child: CustomPaint(
+              painter: CurvedLinePainter(
+                color: const Color(0xFFFFCDD2).withOpacity(0.7),
+                startX: 0,
+                startY: 0,
+                endX: 200,
+                endY: -30,
+              ),
+              size: const Size(300, 100),
+            ),
+          ),
+          // Top Right - Light red rounded square outline
+          Positioned(
+            top: 80,
+            right: 60,
+            child: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(
+                border: Border.all(
+                  color: const Color(0xFFFFCDD2).withOpacity(0.8),
+                  width: 2,
+                ),
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+          // Top Right - Fainter solid light pink rounded square inside
+          Positioned(
+            top: 88,
+            right: 68,
+            child: Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFE0E6).withOpacity(0.5),
+                borderRadius: BorderRadius.circular(8),
+              ),
+            ),
+          ),
+          // Top Right - Vertical column of small light red dots
+          Positioned(
+            top: 100,
+            right: 40,
+            child: Column(
+              children: List.generate(
+                4,
+                (index) => Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFFFFCDD2).withOpacity(0.7),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          // Bottom Left - Large faint light pink circle (partially visible)
+          Positioned(
+            bottom: -120,
+            left: -120,
             child: Container(
               width: 400,
               height: 400,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFFFE0E6),
+                color: const Color(0xFFFFE0E6).withOpacity(0.4),
               ),
             ),
           ),
-          // Decorative pink circle - Bottom right
+          // Bottom Right - Smaller solid light pink circle
           Positioned(
-            bottom: 100,
-            right: -30,
+            bottom: 80,
+            right: 30,
             child: Container(
-              width: 150,
-              height: 150,
+              width: 80,
+              height: 80,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFFFCDD2),
+                color: const Color(0xFFFFCDD2).withOpacity(0.6),
               ),
             ),
           ),
-          // Decorative small square - Top right
+          // Bottom - Thin light red curved line from bottom-left curving to bottom-right
           Positioned(
-            top: 100,
-            right: 50,
-            child: Transform.rotate(
-              angle: 0.3,
-              child: Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFCDD2),
-                  borderRadius: BorderRadius.circular(8),
-                ),
+            bottom: 100,
+            left: 0,
+            child: CustomPaint(
+              painter: CurvedLinePainter(
+                color: const Color(0xFFFFCDD2).withOpacity(0.6),
+                startX: 50,
+                startY: 0,
+                endX: 250,
+                endY: -40,
               ),
+              size: const Size(350, 100),
             ),
           ),
           // Main content
           Center(
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  // PDF Icon with custom design
-                  Container(
-                    width: 120,
-                    height: 120,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFE53935),
-                      borderRadius: BorderRadius.circular(30),
-                    ),
-                    child: Stack(
-                      alignment: Alignment.center,
-                      children: [
-                        // PDF Icon Background
-                        Container(
-                          width: 100,
-                          height: 100,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE53935),
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          child: CustomPaint(
-                            painter: PDFIconPainter(),
-                          ),
-                        ),
-                        // Green checkmark overlay
-                        Positioned(
-                          bottom: 5,
-                          right: 5,
-                          child: Container(
-                            width: 32,
-                            height: 32,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF66BB6A),
-                              borderRadius: BorderRadius.circular(50),
-                            ),
-                            child: const Icon(
-                              Icons.check,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // PDF Icon with custom design
+                Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE53935),
+                    borderRadius: BorderRadius.circular(24),
                   ),
-                  const SizedBox(height: 40),
-                  // App Title
-                  const Text(
-                    'PDF Reader',
-                    style: TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF263238),
-                    ),
+                  child: CustomPaint(
+                    painter: PDFIconPainter(),
                   ),
-                  const SizedBox(height: 50),
-                  // Progress Bar
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 60),
-                    child: AnimatedBuilder(
-                      animation: _progressAnimation,
-                      builder: (context, child) {
-                        return Column(
+                ),
+                const SizedBox(height: 30),
+                // App Title
+                const Text(
+                  'PDF Reader',
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF263238),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+                const SizedBox(height: 40),
+                // Progress Bar - showing partial progress on the right side
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 60),
+                  child: AnimatedBuilder(
+                    animation: _progressAnimation,
+                    builder: (context, child) {
+                      // Calculate available width for progress bar
+                      final screenWidth = MediaQuery.of(context).size.width;
+                      final availableWidth = screenWidth - 120; // 60 padding on each side
+                      // Show partial progress (about 25-30% of bar width) on the right
+                      final progressWidth = availableWidth * 0.28 * _progressAnimation.value;
+                      
+                      return SizedBox(
+                        height: 6,
+                        child: Stack(
                           children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(10),
-                              child: LinearProgressIndicator(
-                                value: _progressAnimation.value,
-                                minHeight: 6,
-                                backgroundColor: const Color(0xFFE0E0E0),
-                                valueColor: const AlwaysStoppedAnimation<Color>(
-                                  Color(0xFFE53935),
+                            // Light grey track (full width)
+                            Container(
+                              width: double.infinity,
+                              height: 6,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFE0E0E0),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                            ),
+                            // Red progress bar aligned to the right
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: Container(
+                                width: progressWidth,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE53935),
+                                  borderRadius: BorderRadius.circular(3),
                                 ),
                               ),
                             ),
                           ],
-                        );
-                      },
-                    ),
+                        ),
+                      );
+                    },
                   ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
         ],
       ),
     );
   }
+}
+
+// Custom painter for curved lines
+class CurvedLinePainter extends CustomPainter {
+  final Color color;
+  final double startX;
+  final double startY;
+  final double endX;
+  final double endY;
+
+  CurvedLinePainter({
+    required this.color,
+    required this.startX,
+    required this.startY,
+    required this.endX,
+    required this.endY,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke
+      ..strokeCap = StrokeCap.round;
+
+    final path = Path();
+    path.moveTo(startX, startY);
+    path.quadraticBezierTo(
+      (startX + endX) / 2,
+      (startY + endY) / 2 - 20,
+      endX,
+      endY,
+    );
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
 class MyHomePage extends StatefulWidget {

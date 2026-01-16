@@ -5,6 +5,7 @@ import 'package:printing/printing.dart';
 import 'dart:io';
 import '../services/pdf_service.dart';
 import '../models/pdf_file.dart';
+import '../widgets/pdf_annotation_overlay.dart';
 
 class PDFViewerScreen extends StatefulWidget {
   final String filePath;
@@ -28,6 +29,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isDarkMode = false;
   bool _isFavorite = false;
   PDFFile? _pdfFileInfo;
+  
+  // Annotation/Editing state
+  bool _isEditingMode = false;
+  String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
+  Color _selectedColor = Colors.red;
+  double _strokeWidth = 3.0;
 
   @override
   void initState() {
@@ -73,6 +80,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   void _onPageChanged(PdfPageChangedDetails details) {
     setState(() {
       _currentPage = details.newPageNumber;
+      // Clear annotations when page changes (optional - you can remove this if you want annotations to persist)
     });
   }
 
@@ -138,12 +146,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       ),
       body: Stack(
         children: [
-          // PDF Viewer
-          SfPdfViewer.file(
-            File(widget.filePath),
-            controller: _pdfViewerController,
-            onDocumentLoaded: _onDocumentLoaded,
-            onPageChanged: _onPageChanged,
+          // PDF Viewer with annotation overlay
+          PDFAnnotationOverlay(
+            drawingColor: _getToolColor(),
+            strokeWidth: _getStrokeWidth(),
+            isDrawing: _isEditingMode && (_selectedTool == 'pen' || _selectedTool == 'highlight' || _selectedTool == 'underline' || _selectedTool == 'eraser'),
+            isEraser: _selectedTool == 'eraser',
+            toolType: _selectedTool,
+            onClear: () {},
+            child: SfPdfViewer.file(
+              File(widget.filePath),
+              controller: _pdfViewerController,
+              onDocumentLoaded: _onDocumentLoaded,
+              onPageChanged: _onPageChanged,
+            ),
           ),
           // Loading indicator
           if (_isLoading)
@@ -152,20 +168,21 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // Edit/Annotate functionality
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Edit/Annotate feature coming soon'),
+      floatingActionButton: _isEditingMode
+          ? null
+          : FloatingActionButton(
+              onPressed: () {
+                setState(() {
+                  _isEditingMode = true;
+                });
+              },
+              backgroundColor: const Color(0xFF1976D2),
+              child: const Icon(Icons.edit, color: Colors.white),
             ),
-          );
-        },
-        backgroundColor: const Color(0xFF1976D2),
-        child: const Icon(Icons.edit, color: Colors.white),
-      ),
-      bottomNavigationBar: _totalPages > 0
-          ? Container(
+      bottomNavigationBar: _isEditingMode
+          ? _buildEditingToolbar()
+          : (_totalPages > 0
+              ? Container(
               height: 80,
               decoration: BoxDecoration(
                 color: Colors.white,
@@ -247,7 +264,141 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 ),
               ),
             )
-          : null,
+              : null),
+    );
+  }
+
+  Color _getToolColor() {
+    switch (_selectedTool) {
+      case 'highlight':
+        return Colors.yellow.withOpacity(0.4);
+      case 'underline':
+        return Colors.blue;
+      case 'eraser':
+        return Colors.white;
+      default:
+        return _selectedColor;
+    }
+  }
+
+  double _getStrokeWidth() {
+    switch (_selectedTool) {
+      case 'highlight':
+        return 15.0; // Thicker for highlight
+      case 'underline':
+        return 2.0; // Thin line for underline
+      case 'eraser':
+        return 20.0; // Larger eraser
+      default:
+        return _strokeWidth;
+    }
+  }
+
+  Widget _buildEditingToolbar() {
+    return Container(
+      height: 70,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, -5),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          // Document/Text tool
+          _buildToolButton(
+            icon: Icons.text_fields,
+            label: 'Text',
+            isSelected: _selectedTool == 'text',
+            onTap: () => _showTextInputDialog(),
+          ),
+          // Underline tool
+          _buildToolButton(
+            icon: Icons.format_underline,
+            label: 'Underline',
+            isSelected: _selectedTool == 'underline',
+            onTap: () => setState(() => _selectedTool = 'underline'),
+          ),
+          // Highlight tool
+          _buildToolButton(
+            icon: Icons.highlight,
+            label: 'Highlight',
+            isSelected: _selectedTool == 'highlight',
+            onTap: () => setState(() => _selectedTool = 'highlight'),
+          ),
+          // Pen tool
+          _buildToolButton(
+            icon: Icons.edit,
+            label: 'Pen',
+            isSelected: _selectedTool == 'pen',
+            onTap: () => setState(() => _selectedTool = 'pen'),
+          ),
+          // Eraser tool
+          _buildToolButton(
+            icon: Icons.cleaning_services,
+            label: 'Eraser',
+            isSelected: _selectedTool == 'eraser',
+            onTap: () => setState(() => _selectedTool = 'eraser'),
+          ),
+          // Done button
+          _buildToolButton(
+            icon: Icons.check,
+            label: 'Done',
+            isSelected: false,
+            onTap: () {
+              setState(() {
+                _isEditingMode = false;
+                _selectedTool = 'none';
+              });
+            },
+            color: Colors.green,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildToolButton({
+    required IconData icon,
+    required String label,
+    required bool isSelected,
+    required VoidCallback onTap,
+    Color? color,
+  }) {
+    final buttonColor = color ?? (_selectedTool == 'pen' ? Colors.red : Colors.grey[700]!);
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? buttonColor.withOpacity(0.1) : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? buttonColor : Colors.grey[600],
+              size: 24,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? buttonColor : Colors.grey[600],
+                fontSize: 10,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -585,6 +736,45 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             },
             style: TextButton.styleFrom(foregroundColor: Colors.red),
             child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showTextInputDialog() {
+    final textController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Text'),
+        content: TextField(
+          controller: textController,
+          decoration: const InputDecoration(
+            hintText: 'Enter text to add',
+            border: OutlineInputBorder(),
+          ),
+          maxLines: 3,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (textController.text.isNotEmpty) {
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Text "${textController.text}" added'),
+                    duration: const Duration(seconds: 2),
+                  ),
+                );
+                // TODO: Implement text annotation on PDF
+              }
+            },
+            child: const Text('Add'),
           ),
         ],
       ),

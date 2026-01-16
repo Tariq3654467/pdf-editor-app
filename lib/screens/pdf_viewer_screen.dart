@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
@@ -70,12 +71,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    _pdfViewerController.dispose();
-    _searchController.dispose();
-    super.dispose();
-  }
 
   void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
     setState(() {
@@ -108,6 +103,15 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           icon: const Icon(Icons.arrow_back, color: Colors.black),
           onPressed: () => Navigator.of(context).pop(),
         ),
+        title: Text(
+          'Page $_currentPage',
+          style: const TextStyle(
+            color: Colors.black87,
+            fontSize: 18,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        centerTitle: false,
         actions: [
           IconButton(
             icon: const Icon(Icons.search, color: Colors.black),
@@ -125,28 +129,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             onPressed: _showViewModeBottomSheet,
           ),
           IconButton(
-            icon: const Icon(Icons.share, color: Colors.black),
-            onPressed: _sharePDF,
+            icon: const Icon(Icons.more_vert, color: Colors.black),
+            onPressed: _showOptionsBottomSheet,
           ),
         ],
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(40),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: [
-                Text(
-                  'Page $_currentPage',
-                  style: const TextStyle(
-                    color: Colors.black87,
-                    fontSize: 14,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
       ),
       body: Stack(
         children: [
@@ -761,18 +747,37 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
-  void _toggleOrientation() {
+  void _toggleOrientation() async {
     setState(() {
       _isPortrait = !_isPortrait;
     });
-    // Note: Actual orientation change requires SystemChrome.setPreferredOrientations
-    // For now, we'll just show a message
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_isPortrait ? 'Portrait mode' : 'Landscape mode'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+    
+    // Actually change the device orientation
+    if (_isPortrait) {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.portraitUp,
+        DeviceOrientation.portraitDown,
+      ]);
+    } else {
+      await SystemChrome.setPreferredOrientations([
+        DeviceOrientation.landscapeLeft,
+        DeviceOrientation.landscapeRight,
+      ]);
+    }
+  }
+
+  @override
+  void dispose() {
+    // Reset orientation to allow all orientations when leaving the screen
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    _pdfViewerController.dispose();
+    _searchController.dispose();
+    super.dispose();
   }
 
   void _showViewModeBottomSheet() {
@@ -873,12 +878,23 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Widget _buildPagePreviewBar() {
     // Calculate which pages to show (current page and adjacent pages)
-    int startPage = (_currentPage - 1).clamp(0, _totalPages - 1);
-    int endPage = (startPage + 2).clamp(0, _totalPages);
+    // Always show 3 pages: previous, current, next (if available)
+    int startPage = _currentPage - 1;
+    int endPage = _currentPage + 1;
     
-    // Adjust if we're near the end
-    if (endPage - startPage < 3 && startPage > 0) {
-      startPage = (endPage - 2).clamp(0, _totalPages - 1);
+    // Adjust boundaries
+    if (startPage < 1) {
+      startPage = 1;
+      endPage = (_totalPages >= 3) ? 3 : _totalPages;
+    }
+    if (endPage > _totalPages) {
+      endPage = _totalPages;
+      startPage = (_totalPages >= 3) ? _totalPages - 2 : 1;
+    }
+    
+    final pagesToShow = <int>[];
+    for (int i = startPage; i <= endPage; i++) {
+      pagesToShow.add(i);
     }
 
     return Container(
@@ -896,21 +912,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          if (startPage > 0)
+          if (_currentPage > 1)
             IconButton(
               icon: const Icon(Icons.chevron_left),
               onPressed: () {
-                final newPage = (startPage - 1).clamp(1, _totalPages);
-                _goToPage(newPage);
+                _goToPage(_currentPage - 1);
               },
             ),
           Expanded(
             child: ListView.builder(
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 8),
-              itemCount: endPage - startPage + 1,
+              itemCount: pagesToShow.length,
               itemBuilder: (context, index) {
-                final pageNumber = startPage + index + 1;
+                final pageNumber = pagesToShow[index];
                 final isActive = _currentPage == pageNumber;
                 return GestureDetector(
                   onTap: () => _goToPage(pageNumber),
@@ -931,29 +946,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // Page thumbnail placeholder - in real app, you'd render actual PDF page
-                        Container(
-                          width: 40,
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: Colors.grey[300],
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Center(
-                            child: Text(
-                              '$pageNumber',
-                              style: TextStyle(
-                                color: isActive
-                                    ? const Color(0xFFE53935)
-                                    : Colors.grey[600],
-                                fontSize: 12,
-                                fontWeight: isActive
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                          ),
-                        ),
+                        // Page thumbnail
+                        _buildPageThumbnail(pageNumber, isActive),
                         const SizedBox(height: 4),
                         Text(
                           '$pageNumber',
@@ -974,17 +968,90 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               },
             ),
           ),
-          if (endPage < _totalPages)
+          if (_currentPage < _totalPages)
             IconButton(
               icon: const Icon(Icons.chevron_right),
               onPressed: () {
-                final newPage = (endPage + 1).clamp(1, _totalPages);
-                _goToPage(newPage);
+                _goToPage(_currentPage + 1);
               },
             ),
         ],
       ),
     );
   }
+
+  Widget _buildPageThumbnail(int pageNumber, bool isActive) {
+    return Container(
+      width: 40,
+      height: 50,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(
+          color: isActive ? const Color(0xFFE53935) : Colors.grey[300]!,
+          width: isActive ? 1.5 : 0.5,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 2,
+            offset: const Offset(0, 1),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          // Page preview placeholder with lines to simulate text
+          Positioned.fill(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: CustomPaint(
+                painter: PagePreviewPainter(),
+              ),
+            ),
+          ),
+          // Page number at top
+          Positioned(
+            top: 2,
+            left: 0,
+            right: 0,
+            child: Text(
+              '$pageNumber',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: isActive ? const Color(0xFFE53935) : Colors.grey[700],
+                fontSize: 9,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class PagePreviewPainter extends CustomPainter {
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = Colors.grey[300]!
+      ..strokeWidth = 0.5;
+
+    // Draw horizontal lines to simulate text lines
+    for (double y = 8; y < size.height - 4; y += 3) {
+      canvas.drawLine(
+        Offset(3, y),
+        Offset(size.width - 3, y),
+        paint,
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 

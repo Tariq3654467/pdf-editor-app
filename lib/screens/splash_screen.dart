@@ -7,6 +7,7 @@ import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../models/pdf_file.dart';
 import 'pdf_viewer_screen.dart';
+import 'settings_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -452,7 +453,13 @@ class _MyHomePageState extends State<MyHomePage> {
                           tooltip: 'Premium',
                         ),
                         IconButton(
-                          onPressed: () {},
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => const SettingsScreen(),
+                              ),
+                            );
+                          },
                           icon: const Icon(Icons.settings, color: Colors.white),
                           tooltip: 'Settings',
                         ),

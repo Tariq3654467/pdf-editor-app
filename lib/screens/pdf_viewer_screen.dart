@@ -35,6 +35,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
   Color _selectedColor = Colors.red;
   double _strokeWidth = 3.0;
+  
+  // View mode and orientation
+  String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
+  bool _isPortrait = true;
+  final TextEditingController _searchController = TextEditingController();
+  String? _searchText;
 
   @override
   void initState() {
@@ -104,25 +110,22 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.search, color: Colors.black),
-            onPressed: () {
-              // Search functionality
-            },
+            onPressed: _showSearchDialog,
+          ),
+          IconButton(
+            icon: Icon(
+              _isPortrait ? Icons.screen_rotation : Icons.screen_lock_portrait,
+              color: Colors.black,
+            ),
+            onPressed: _toggleOrientation,
+          ),
+          IconButton(
+            icon: const Icon(Icons.view_module, color: Colors.black),
+            onPressed: _showViewModeBottomSheet,
           ),
           IconButton(
             icon: const Icon(Icons.share, color: Colors.black),
-            onPressed: () {
-              // Share functionality
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.description, color: Colors.black),
-            onPressed: () {
-              // Document info
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.black),
-            onPressed: _showOptionsBottomSheet,
+            onPressed: _sharePDF,
           ),
         ],
         bottom: PreferredSize(
@@ -159,6 +162,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               controller: _pdfViewerController,
               onDocumentLoaded: _onDocumentLoaded,
               onPageChanged: _onPageChanged,
+              scrollDirection: _viewMode == 'horizontal' 
+                  ? PdfScrollDirection.horizontal 
+                  : PdfScrollDirection.vertical,
+              pageLayoutMode: _viewMode == 'page' 
+                  ? PdfPageLayoutMode.single 
+                  : PdfPageLayoutMode.continuous,
             ),
           ),
           // Loading indicator
@@ -182,88 +191,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       bottomNavigationBar: _isEditingMode
           ? _buildEditingToolbar()
           : (_totalPages > 0
-              ? Container(
-              height: 80,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: const Offset(0, -5),
-                  ),
-                ],
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: List.generate(
-                  _totalPages > 3 ? 3 : _totalPages,
-                  (index) {
-                    final pageNumber = index + 1;
-                    final isActive = _currentPage == pageNumber;
-                    return GestureDetector(
-                      onTap: () => _goToPage(pageNumber),
-                      child: Container(
-                        width: 60,
-                        height: 60,
-                        margin: const EdgeInsets.symmetric(horizontal: 4),
-                        decoration: BoxDecoration(
-                          color: isActive ? Colors.white : Colors.grey[200],
-                          border: Border.all(
-                            color: isActive
-                                ? const Color(0xFFE53935)
-                                : Colors.grey[300]!,
-                            width: isActive ? 2 : 1,
-                          ),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            // Page thumbnail placeholder
-                            Container(
-                              width: 40,
-                              height: 30,
-                              decoration: BoxDecoration(
-                                color: Colors.grey[300],
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                              child: Center(
-                                child: Text(
-                                  '$pageNumber',
-                                  style: TextStyle(
-                                    color: isActive
-                                        ? const Color(0xFFE53935)
-                                        : Colors.grey[600],
-                                    fontSize: 12,
-                                    fontWeight: isActive
-                                        ? FontWeight.bold
-                                        : FontWeight.normal,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Text(
-                              '$pageNumber',
-                              style: TextStyle(
-                                color: isActive
-                                    ? const Color(0xFFE53935)
-                                    : Colors.grey[600],
-                                fontSize: 12,
-                                fontWeight: isActive
-                                    ? FontWeight.bold
-                                    : FontWeight.normal,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
-                ),
-              ),
-            )
+              ? _buildPagePreviewBar()
               : null),
     );
   }
@@ -776,6 +704,283 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             },
             child: const Text('Add'),
           ),
+        ],
+      ),
+    );
+  }
+
+  void _showSearchDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Search in PDF'),
+        content: TextField(
+          controller: _searchController,
+          decoration: const InputDecoration(
+            hintText: 'Enter text to search',
+            border: OutlineInputBorder(),
+            prefixIcon: Icon(Icons.search),
+          ),
+          autofocus: true,
+          onSubmitted: (value) {
+            if (value.isNotEmpty) {
+              setState(() {
+                _searchText = value;
+              });
+              _pdfViewerController.searchText(value);
+              Navigator.pop(context);
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _searchController.clear();
+              setState(() {
+                _searchText = null;
+              });
+              Navigator.pop(context);
+            },
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              if (_searchController.text.isNotEmpty) {
+                setState(() {
+                  _searchText = _searchController.text;
+                });
+                _pdfViewerController.searchText(_searchController.text);
+                Navigator.pop(context);
+              }
+            },
+            child: const Text('Search'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _toggleOrientation() {
+    setState(() {
+      _isPortrait = !_isPortrait;
+    });
+    // Note: Actual orientation change requires SystemChrome.setPreferredOrientations
+    // For now, we'll just show a message
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(_isPortrait ? 'Portrait mode' : 'Landscape mode'),
+        duration: const Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _showViewModeBottomSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
+                'View mode',
+                style: TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF263238),
+                ),
+              ),
+            ),
+            _buildViewModeOption(
+              icon: Icons.swap_vert,
+              title: 'Vertical scroll',
+              value: 'vertical',
+            ),
+            _buildViewModeOption(
+              icon: Icons.swap_horiz,
+              title: 'Horizontal scroll',
+              value: 'horizontal',
+            ),
+            _buildViewModeOption(
+              icon: Icons.pages,
+              title: 'Page by page',
+              value: 'page',
+            ),
+            SizedBox(height: MediaQuery.of(context).padding.bottom),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildViewModeOption({
+    required IconData icon,
+    required String title,
+    required String value,
+  }) {
+    final isSelected = _viewMode == value;
+    return ListTile(
+      leading: Icon(
+        icon,
+        color: isSelected ? const Color(0xFFE53935) : const Color(0xFF9E9E9E),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: isSelected ? const Color(0xFF263238) : const Color(0xFF9E9E9E),
+          fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
+        ),
+      ),
+      trailing: Radio<String>(
+        value: value,
+        groupValue: _viewMode,
+        onChanged: (newValue) {
+          setState(() {
+            _viewMode = newValue!;
+          });
+          Navigator.pop(context);
+        },
+        activeColor: const Color(0xFFE53935),
+      ),
+      onTap: () {
+        setState(() {
+          _viewMode = value;
+        });
+        Navigator.pop(context);
+      },
+    );
+  }
+
+  Widget _buildPagePreviewBar() {
+    // Calculate which pages to show (current page and adjacent pages)
+    int startPage = (_currentPage - 1).clamp(0, _totalPages - 1);
+    int endPage = (startPage + 2).clamp(0, _totalPages);
+    
+    // Adjust if we're near the end
+    if (endPage - startPage < 3 && startPage > 0) {
+      startPage = (endPage - 2).clamp(0, _totalPages - 1);
+    }
+
+    return Container(
+      height: 100,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.1),
+            blurRadius: 10,
+            offset: const Offset(0, -5),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          if (startPage > 0)
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              onPressed: () {
+                final newPage = (startPage - 1).clamp(1, _totalPages);
+                _goToPage(newPage);
+              },
+            ),
+          Expanded(
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+              itemCount: endPage - startPage + 1,
+              itemBuilder: (context, index) {
+                final pageNumber = startPage + index + 1;
+                final isActive = _currentPage == pageNumber;
+                return GestureDetector(
+                  onTap: () => _goToPage(pageNumber),
+                  child: Container(
+                    width: 60,
+                    height: 80,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    decoration: BoxDecoration(
+                      color: isActive ? Colors.white : Colors.grey[200],
+                      border: Border.all(
+                        color: isActive
+                            ? const Color(0xFFE53935)
+                            : Colors.grey[300]!,
+                        width: isActive ? 2 : 1,
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        // Page thumbnail placeholder - in real app, you'd render actual PDF page
+                        Container(
+                          width: 40,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: Colors.grey[300],
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Center(
+                            child: Text(
+                              '$pageNumber',
+                              style: TextStyle(
+                                color: isActive
+                                    ? const Color(0xFFE53935)
+                                    : Colors.grey[600],
+                                fontSize: 12,
+                                fontWeight: isActive
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          '$pageNumber',
+                          style: TextStyle(
+                            color: isActive
+                                ? const Color(0xFFE53935)
+                                : Colors.grey[600],
+                            fontSize: 10,
+                            fontWeight: isActive
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          if (endPage < _totalPages)
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              onPressed: () {
+                final newPage = (endPage + 1).clamp(1, _totalPages);
+                _goToPage(newPage);
+              },
+            ),
         ],
       ),
     );

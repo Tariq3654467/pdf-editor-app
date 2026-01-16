@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:printing/printing.dart';
 import 'package:path/path.dart' as path;
 import 'dart:io';

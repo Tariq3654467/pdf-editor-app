@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
-import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
+import 'package:file_picker/file_picker.dart';
 import 'dart:io';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
+import 'dart:async';
 import '../services/pdf_service.dart';
+import '../services/pdf_tools_service.dart';
+import '../services/pdf_preferences_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
 
@@ -33,18 +34,24 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isDarkMode = false;
   bool _isFavorite = false;
   PDFFile? _pdfFileInfo;
+  bool _showPageIndicator = false;
+  Timer? _hidePageIndicatorTimer;
+  Timer? _scrollCheckTimer;
+  bool _isScrolling = false;
+  bool _showPagePreview = true; // Control visibility of page preview bar
   
   // Annotation/Editing state
   bool _isEditingMode = false;
   String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
   Color _selectedColor = Colors.red;
   double _strokeWidth = 3.0;
+  final GlobalKey<PDFAnnotationOverlayState> _annotationOverlayKey = GlobalKey<PDFAnnotationOverlayState>();
+  bool _canUndo = false;
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
   bool _isPortrait = true;
   final TextEditingController _searchController = TextEditingController();
-  String? _searchText;
   final ScrollController _pagePreviewScrollController = ScrollController();
 
   @override
@@ -52,11 +59,34 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     super.initState();
     _pdfViewerController = PdfViewerController();
     _loadPDFInfo();
+    _autoBookmarkPDF();
     
     // Add listener to scroll controller to debug
     _pagePreviewScrollController.addListener(() {
       // This helps ensure the controller is working
     });
+  }
+
+  Future<void> _autoBookmarkPDF() async {
+    // Automatically add PDF to bookmarks when opened
+    try {
+      final isBookmarked = await PDFPreferencesService.isBookmarked(widget.filePath);
+      if (!isBookmarked) {
+        await PDFPreferencesService.setBookmark(widget.filePath, true);
+        setState(() {
+          _isFavorite = true;
+        });
+      } else {
+        // Load existing bookmark status
+        setState(() {
+          _isFavorite = true;
+        });
+      }
+      // Also update last accessed time
+      await PDFPreferencesService.setLastAccessed(widget.filePath);
+    } catch (e) {
+      print('Error auto-bookmarking PDF: $e');
+    }
   }
 
   Future<void> _loadPDFInfo() async {
@@ -68,12 +98,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       final modifiedDate = stat.modified;
       final date = PDFService.formatDate(modifiedDate);
 
+      // Load bookmark status
+      final isBookmarked = await PDFPreferencesService.isBookmarked(widget.filePath);
+      
       setState(() {
+        _isFavorite = isBookmarked;
         _pdfFileInfo = PDFFile(
           name: fileName,
           date: date,
           size: fileSize,
-          isFavorite: _isFavorite,
+          isFavorite: isBookmarked,
           filePath: widget.filePath,
         );
       });
@@ -107,8 +141,22 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         _currentPage = newPage;
         // Clear annotations when page changes (optional - you can remove this if you want annotations to persist)
       });
-      // Scroll to current page in preview bar
-      _scrollToCurrentPage();
+      // show page indicator briefly
+      _hidePageIndicatorTimer?.cancel();
+      setState(() {
+        _showPageIndicator = true;
+      });
+      _hidePageIndicatorTimer = Timer(const Duration(seconds: 1), () {
+        if (mounted) {
+          setState(() {
+            _showPageIndicator = false;
+          });
+        }
+      });
+      // Scroll to current page in preview bar (only if visible)
+      if (_showPagePreview) {
+        _scrollToCurrentPage();
+      }
     }
   }
 
@@ -179,24 +227,77 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     if (pageNumber >= 1 && pageNumber <= _totalPages) {
       setState(() {
         _currentPage = pageNumber;
+        _showPagePreview = false; // Hide preview bar when page is clicked
       });
       _pdfViewerController.jumpToPage(pageNumber);
-      // Scroll preview bar to show current page
-      Future.delayed(const Duration(milliseconds: 100), () {
-        if (mounted) {
-          _scrollToCurrentPage();
-        }
-      });
     }
+  }
+
+  void _startScrollCheckTimer() {
+    _stopScrollCheckTimer(); // Stop any existing timer
+    _scrollCheckTimer = Timer.periodic(const Duration(milliseconds: 200), (timer) {
+      if (!_isScrolling || !mounted) {
+        _stopScrollCheckTimer();
+        return;
+      }
+      _updateCurrentPageFromScroll();
+    });
+  }
+
+  void _stopScrollCheckTimer() {
+    _scrollCheckTimer?.cancel();
+    _scrollCheckTimer = null;
   }
 
   void _updateCurrentPageFromScroll() {
     // Try to get the current page from the controller
-    // Since SfPdfViewer doesn't expose a direct way to get current page during scroll,
-    // we rely on onPageChanged callback which should fire when page actually changes
-    // But we can still trigger a scroll update to ensure preview bar is in sync
+    // The onPageChanged callback should be the primary source, but we check here as backup
     if (mounted) {
-      _scrollToCurrentPage();
+      try {
+        // Try to access pageNumber property (may not exist in all versions)
+        int? currentPageFromController;
+        try {
+          // Use reflection or direct access - if this fails, we'll catch it
+          currentPageFromController = _pdfViewerController.pageNumber;
+        } catch (_) {
+          // pageNumber property might not be available, that's okay
+          // We'll rely on onPageChanged callback instead
+        }
+        
+        if (currentPageFromController != null && 
+            currentPageFromController != _currentPage &&
+            currentPageFromController >= 1 && 
+            currentPageFromController <= _totalPages) {
+          setState(() {
+            _currentPage = currentPageFromController!;
+          });
+          // Show page indicator briefly
+          _hidePageIndicatorTimer?.cancel();
+          setState(() {
+            _showPageIndicator = true;
+          });
+          _hidePageIndicatorTimer = Timer(const Duration(seconds: 1), () {
+            if (mounted) {
+              setState(() {
+                _showPageIndicator = false;
+              });
+            }
+          });
+          // Scroll preview bar to show current page (only if visible)
+          if (_showPagePreview) {
+            _scrollToCurrentPage();
+          }
+        } else {
+          // Even if page hasn't changed, ensure preview bar is in sync (only if visible)
+          if (_showPagePreview) {
+            _scrollToCurrentPage();
+          }
+        }
+      } catch (e) {
+        print('Error in _updateCurrentPageFromScroll: $e');
+        // Fallback: just scroll the preview bar to keep it in sync
+        _scrollToCurrentPage();
+      }
     }
   }
 
@@ -205,6 +306,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       case 'horizontal':
         return PdfScrollDirection.horizontal;
       case 'page':
+        // For page-by-page interaction prefer horizontal swiping
+        return PdfScrollDirection.horizontal;
       case 'vertical':
       default:
         return PdfScrollDirection.vertical;
@@ -224,23 +327,28 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Define colors based on dark mode
+    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = _isDarkMode ? Colors.white : const Color(0xFF424242);
+    final iconColor = _isDarkMode ? Colors.white : const Color(0xFF424242);
+    
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: backgroundColor,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: backgroundColor,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(
+          icon: Icon(
             Icons.chevron_left,
-            color: Color(0xFF424242), // Dark grey
+            color: iconColor,
             size: 24,
           ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           'Page $_currentPage',
-          style: const TextStyle(
-            color: Color(0xFF424242),
+          style: TextStyle(
+            color: textColor,
             fontSize: 18,
             fontWeight: FontWeight.w500,
           ),
@@ -248,9 +356,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         centerTitle: false,
         actions: [
           IconButton(
-            icon: const Icon(
+            icon: Icon(
               Icons.search_outlined,
-              color: Color(0xFF424242), // Dark grey outline style
+              color: iconColor,
               size: 24,
             ),
             onPressed: _showSearchDialog,
@@ -258,30 +366,30 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           IconButton(
             icon: Icon(
               _isPortrait ? Icons.screen_rotation_outlined : Icons.screen_lock_portrait_outlined,
-              color: const Color(0xFF424242), // Dark grey outline style
+              color: iconColor,
               size: 24,
             ),
             onPressed: _toggleOrientation,
           ),
           IconButton(
-            icon: const Icon(
+            icon: Icon(
               Icons.description_outlined,
-              color: Color(0xFF424242), // Dark grey outline style - stacked document icon
+              color: iconColor,
               size: 24,
             ),
             onPressed: _showViewModeBottomSheet,
           ),
           IconButton(
-            icon: const Icon(
+            icon: Icon(
               Icons.more_vert,
-              color: Color(0xFF424242), // Dark grey outline style
+              color: iconColor,
               size: 24,
             ),
             onPressed: _showOptionsBottomSheet,
           ),
         ],
-        iconTheme: const IconThemeData(
-          color: Color(0xFF424242),
+        iconTheme: IconThemeData(
+          color: iconColor,
           size: 24,
         ),
       ),
@@ -289,19 +397,38 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         children: [
           // PDF Viewer with annotation overlay
           PDFAnnotationOverlay(
+            key: _annotationOverlayKey,
             drawingColor: _getToolColor(),
             strokeWidth: _getStrokeWidth(),
             isDrawing: _isEditingMode && (_selectedTool == 'pen' || _selectedTool == 'highlight' || _selectedTool == 'underline' || _selectedTool == 'eraser'),
             isEraser: _selectedTool == 'eraser',
             toolType: _selectedTool,
             onClear: () {},
+            onUndoStateChanged: (canUndo) {
+              setState(() {
+                _canUndo = canUndo;
+              });
+            },
             child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
                 // Detect when user scrolls manually and update preview bar
-                if (notification is ScrollUpdateNotification || 
-                    notification is ScrollEndNotification) {
-                  // Check current page after scroll
-                  Future.delayed(const Duration(milliseconds: 100), () {
+                if (notification is ScrollStartNotification) {
+                  // Start periodic checks during scrolling
+                  _isScrolling = true;
+                  _startScrollCheckTimer();
+                } else if (notification is ScrollUpdateNotification) {
+                  // Update during scroll for real-time feedback
+                  _isScrolling = true;
+                  Future.delayed(const Duration(milliseconds: 50), () {
+                    if (mounted) {
+                      _updateCurrentPageFromScroll();
+                    }
+                  });
+                } else if (notification is ScrollEndNotification) {
+                  // Stop periodic checks and do final update
+                  _isScrolling = false;
+                  _stopScrollCheckTimer();
+                  Future.delayed(const Duration(milliseconds: 150), () {
                     if (mounted) {
                       _updateCurrentPageFromScroll();
                     }
@@ -319,6 +446,35 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 pageLayoutMode: _getPageLayoutMode(),
                 enableDoubleTapZooming: true,
                 enableTextSelection: true,
+              ),
+            ),
+          ),
+          // Page count indicator (briefly shown on page change)
+          // Use IgnorePointer to ensure it doesn't block PDF scrolling
+          Positioned(
+            top: 16,
+            left: 16,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _showPageIndicator ? 1 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: _isDarkMode 
+                        ? Colors.white.withOpacity(0.2) 
+                        : Colors.black.withOpacity(0.6),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    '$_currentPage/$_totalPages',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
               ),
             ),
           ),
@@ -342,7 +498,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             ),
       bottomNavigationBar: _isEditingMode
           ? _buildEditingToolbar()
-          : (_totalPages > 0
+          : (_totalPages > 0 && _showPagePreview
               ? _buildPagePreviewBar()
               : null),
     );
@@ -390,12 +546,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          // Document/Text tool
+          // Copy text button
           _buildToolButton(
-            icon: Icons.text_fields,
-            label: 'Text',
-            isSelected: _selectedTool == 'text',
-            onTap: () => _showTextInputDialog(),
+            icon: Icons.content_copy,
+            label: 'Copy',
+            isSelected: false,
+            onTap: () {
+              _copySelectedText();
+            },
           ),
           // Underline tool
           _buildToolButton(
@@ -404,12 +562,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'underline',
             onTap: () => setState(() => _selectedTool = 'underline'),
           ),
-          // Highlight tool
+          // Text tool
           _buildToolButton(
-            icon: Icons.highlight,
-            label: 'Highlight',
-            isSelected: _selectedTool == 'highlight',
-            onTap: () => setState(() => _selectedTool = 'highlight'),
+            icon: Icons.text_fields,
+            label: 'Text',
+            isSelected: _selectedTool == 'text',
+            onTap: () => _showTextInputDialog(),
           ),
           // Pen tool
           _buildToolButton(
@@ -418,12 +576,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'pen',
             onTap: () => setState(() => _selectedTool = 'pen'),
           ),
-          // Eraser tool
+          // Highlight tool
           _buildToolButton(
-            icon: Icons.cleaning_services,
-            label: 'Eraser',
-            isSelected: _selectedTool == 'eraser',
-            onTap: () => setState(() => _selectedTool = 'eraser'),
+            icon: Icons.highlight,
+            label: 'Highlight',
+            isSelected: _selectedTool == 'highlight',
+            onTap: () => setState(() => _selectedTool = 'highlight'),
           ),
           // Done button
           _buildToolButton(
@@ -447,36 +605,39 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required IconData icon,
     required String label,
     required bool isSelected,
-    required VoidCallback onTap,
+    required VoidCallback? onTap,
     Color? color,
   }) {
     final buttonColor = color ?? (_selectedTool == 'pen' ? Colors.red : Colors.grey[700]!);
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-        decoration: BoxDecoration(
-          color: isSelected ? buttonColor.withOpacity(0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              color: isSelected ? buttonColor : Colors.grey[600],
-              size: 24,
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? buttonColor : Colors.grey[600],
-                fontSize: 10,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+    final isEnabled = onTap != null;
+    return Opacity(
+      opacity: isEnabled ? 1.0 : 0.5,
+      child: GestureDetector(
+        onTap: isEnabled ? onTap : null,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: isSelected ? buttonColor.withOpacity(0.1) : Colors.transparent,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                color: isSelected ? buttonColor : (isEnabled ? Colors.grey[600] : Colors.grey[400]),
+                size: 24,
               ),
-            ),
-          ],
+              const SizedBox(height: 2),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isSelected ? buttonColor : (isEnabled ? Colors.grey[600] : Colors.grey[400]),
+                  fontSize: 10,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                ),
+              ),
+            ]),
         ),
       ),
     );
@@ -492,10 +653,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Widget _buildOptionsBottomSheet() {
+    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    final secondaryTextColor = _isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
+    
     return Container(
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.only(
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: const BorderRadius.only(
           topLeft: Radius.circular(20),
           topRight: Radius.circular(20),
         ),
@@ -544,8 +709,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                       children: [
                         Text(
                           _pdfFileInfo!.name,
-                          style: const TextStyle(
-                            color: Color(0xFF263238),
+                          style: TextStyle(
+                            color: textColor,
                             fontSize: 14,
                             fontWeight: FontWeight.w600,
                           ),
@@ -555,8 +720,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                         const SizedBox(height: 4),
                         Text(
                           '${_pdfFileInfo!.date} • ${_pdfFileInfo!.size}',
-                          style: const TextStyle(
-                            color: Color(0xFF9E9E9E),
+                          style: TextStyle(
+                            color: secondaryTextColor,
                             fontSize: 12,
                           ),
                         ),
@@ -568,11 +733,25 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                       _isFavorite ? Icons.star : Icons.star_outline,
                       color: _isFavorite
                           ? const Color(0xFFE53935)
-                          : const Color(0xFF9E9E9E),
+                          : secondaryTextColor,
                     ),
-                    onPressed: () {
+                    onPressed: () async {
+                      final newBookmarkStatus = !_isFavorite;
+                      await PDFPreferencesService.setBookmark(
+                        widget.filePath,
+                        newBookmarkStatus,
+                      );
                       setState(() {
-                        _isFavorite = !_isFavorite;
+                        _isFavorite = newBookmarkStatus;
+                        if (_pdfFileInfo != null) {
+                          _pdfFileInfo = PDFFile(
+                            name: _pdfFileInfo!.name,
+                            date: _pdfFileInfo!.date,
+                            size: _pdfFileInfo!.size,
+                            isFavorite: newBookmarkStatus,
+                            filePath: _pdfFileInfo!.filePath,
+                          );
+                        }
                       });
                     },
                   ),
@@ -629,15 +808,18 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required VoidCallback onTap,
     bool isDestructive = false,
   }) {
+    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    final iconColor = isDestructive ? Colors.red : textColor;
+    
     return ListTile(
       leading: Icon(
         icon,
-        color: isDestructive ? Colors.red : const Color(0xFF263238),
+        color: iconColor,
       ),
       title: Text(
         title,
         style: TextStyle(
-          color: isDestructive ? Colors.red : const Color(0xFF263238),
+          color: isDestructive ? Colors.red : textColor,
           fontSize: 16,
         ),
       ),
@@ -660,14 +842,76 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
-  void _mergePDF() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Select another PDF to merge'),
-        duration: Duration(seconds: 2),
-      ),
-    );
-    // TODO: Implement merge PDF functionality
+  Future<void> _mergePDF() async {
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      // Pick another PDF file to merge
+      FilePickerResult? result = await FilePicker.platform.pickFiles(
+        type: FileType.custom,
+        allowedExtensions: ['pdf'],
+      );
+
+      if (result != null && result.files.single.path != null) {
+        final selectedPdfPath = result.files.single.path!;
+        
+        // Merge the current PDF with the selected PDF
+        final mergedPath = await PDFToolsService.mergePDFs([
+          widget.filePath,
+          selectedPdfPath,
+        ]);
+
+        // Close loading dialog
+        if (mounted) {
+          Navigator.pop(context);
+        }
+
+        if (mergedPath != null) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('PDFs merged successfully!'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+            // Optionally navigate to the merged PDF or refresh
+            // You can navigate to the new merged PDF if needed
+          }
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('Failed to merge PDFs. Please try again.'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
+      } else {
+        // Close loading dialog if user cancelled
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      // Close loading dialog on error
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error merging PDFs: $e'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   void _splitPDF() {
@@ -675,26 +919,78 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('Split PDF'),
-        content: const Text('This will split the PDF into separate pages. Continue?'),
+        content: Text(
+          'This will split "${widget.fileName}" into $_totalPages separate page files. Continue?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('PDF split functionality coming soon'),
-                ),
-              );
+              await _performSplitPDF();
             },
             child: const Text('Split'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _performSplitPDF() async {
+    try {
+      // Show loading indicator
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+
+      // Split the PDF
+      final splitFiles = await PDFToolsService.splitPDF(widget.filePath);
+
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (splitFiles.isNotEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'PDF split successfully! Created ${splitFiles.length} page file(s).',
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to split PDF. Please try again.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      // Close loading dialog on error
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error splitting PDF: $e'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
+    }
   }
 
   void _goToPageDialog() {
@@ -822,6 +1118,41 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
+  Future<void> _copySelectedText() async {
+    try {
+      // Syncfusion PDF viewer handles text selection natively
+      // Users can select text by long-pressing and dragging
+      // Once text is selected, they can copy it using the system's copy option
+      // This button provides instructions on how to copy text
+      
+      showDialog(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: const Text('Copy Text'),
+          content: const Text(
+            'To copy text from the PDF:\n\n'
+            '1. Long press on the text you want to copy\n'
+            '2. Drag to select the desired text\n'
+            '3. Use the system copy option from the context menu\n\n'
+            'Text selection is enabled in the PDF viewer.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error: $e'),
+        ),
+      );
+    }
+  }
+
   void _showTextInputDialog() {
     final textController = TextEditingController();
     showDialog(
@@ -876,9 +1207,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           autofocus: true,
           onSubmitted: (value) {
             if (value.isNotEmpty) {
-              setState(() {
-                _searchText = value;
-              });
               _pdfViewerController.searchText(value);
               Navigator.pop(context);
             }
@@ -888,9 +1216,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           TextButton(
             onPressed: () {
               _searchController.clear();
-              setState(() {
-                _searchText = null;
-              });
               Navigator.pop(context);
             },
             child: const Text('Cancel'),
@@ -898,9 +1223,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           TextButton(
             onPressed: () {
               if (_searchController.text.isNotEmpty) {
-                setState(() {
-                  _searchText = _searchController.text;
-                });
                 _pdfViewerController.searchText(_searchController.text);
                 Navigator.pop(context);
               }
@@ -943,17 +1265,22 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     _pdfViewerController.dispose();
     _searchController.dispose();
     _pagePreviewScrollController.dispose();
+    _hidePageIndicatorTimer?.cancel();
+    _stopScrollCheckTimer();
     super.dispose();
   }
 
   void _showViewModeBottomSheet() {
+    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(20),
           ),
@@ -971,14 +1298,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
-            const Padding(
-              padding: EdgeInsets.all(16.0),
+            Padding(
+              padding: const EdgeInsets.all(16.0),
               child: Text(
                 'View mode',
                 style: TextStyle(
                   fontSize: 18,
                   fontWeight: FontWeight.bold,
-                  color: Color(0xFF263238),
+                  color: textColor,
                 ),
               ),
             ),
@@ -1010,15 +1337,18 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required String value,
   }) {
     final isSelected = _viewMode == value;
+    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    final unselectedColor = _isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
+    
     return ListTile(
       leading: Icon(
         icon,
-        color: isSelected ? const Color(0xFFE53935) : const Color(0xFF9E9E9E),
+        color: isSelected ? const Color(0xFFE53935) : unselectedColor,
       ),
       title: Text(
         title,
         style: TextStyle(
-          color: isSelected ? const Color(0xFF263238) : const Color(0xFF9E9E9E),
+          color: isSelected ? textColor : unselectedColor,
           fontWeight: isSelected ? FontWeight.w600 : FontWeight.normal,
         ),
       ),
@@ -1058,14 +1388,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Widget _buildPagePreviewBar() {
     // Show all pages that can fit in the screen width
-    final screenWidth = MediaQuery.of(context).size.width;
     final thumbnailWidth = 60.0; // Width of each thumbnail
-    final thumbnailMargin = 8.0; // Total horizontal margin (4px on each side)
-    final totalThumbnailWidth = thumbnailWidth + thumbnailMargin;
-    
-    // Calculate how many thumbnails can fit (leave some padding)
-    final availableWidth = screenWidth - 32; // Padding on sides
-    final maxVisibleThumbnails = (availableWidth / totalThumbnailWidth).floor();
     
     // Show all pages in a scrollable list
     return Container(

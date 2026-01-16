@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:io';
 import 'package:image_picker/image_picker.dart';
+import 'package:share_plus/share_plus.dart';
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
@@ -964,7 +966,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
               IconButton(
-                onPressed: () {},
+                onPressed: () => _showPDFOptionsMenu(context, pdf),
                 icon: const Icon(Icons.more_vert,
                     color: Color(0xFFBDBDBD), size: 20),
               ),

@@ -1,15 +1,12 @@
 import 'dart:io';
-import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
-import 'package:file_picker/file_picker.dart';
 import 'package:archive/archive.dart';
 import 'package:image/image.dart' as img;
-import 'pdf_service.dart';
 
 class PDFToolsService {
   // Scan to PDF - Convert camera image to PDF

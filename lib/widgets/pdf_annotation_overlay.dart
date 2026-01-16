@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'dart:ui' as ui;
 
 class AnnotationPoint {
   final Offset point;
@@ -25,6 +24,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final bool isEraser;
   final String toolType; // 'pen', 'highlight', 'underline'
   final VoidCallback? onClear;
+  final Function(bool)? onUndoStateChanged;
 
   const PDFAnnotationOverlay({
     super.key,
@@ -35,15 +35,17 @@ class PDFAnnotationOverlay extends StatefulWidget {
     required this.isEraser,
     this.toolType = 'pen',
     this.onClear,
+    this.onUndoStateChanged,
   });
 
   @override
-  State<PDFAnnotationOverlay> createState() => _PDFAnnotationOverlayState();
+  State<PDFAnnotationOverlay> createState() => PDFAnnotationOverlayState();
 }
 
-class _PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
+class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   List<List<AnnotationPoint>> _paths = [];
   List<AnnotationPoint> _currentPath = [];
+
 
   void _onPanStart(DragStartDetails details) {
     if (widget.isDrawing) {
@@ -95,6 +97,7 @@ class _PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
       setState(() {
         _paths.add(List.from(_currentPath));
         _currentPath = [];
+        widget.onUndoStateChanged?.call(true);
       });
     }
   }
@@ -107,24 +110,48 @@ class _PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     widget.onClear?.call();
   }
 
+  void undo() {
+    if (_paths.isNotEmpty) {
+      setState(() {
+        _paths.removeLast();
+        widget.onUndoStateChanged?.call(_paths.isNotEmpty);
+      });
+    }
+  }
+
+  bool get canUndo => _paths.isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onPanStart: _onPanStart,
-      onPanUpdate: _onPanUpdate,
-      onPanEnd: _onPanEnd,
-      child: Stack(
-        children: [
-          widget.child,
-          CustomPaint(
-            painter: AnnotationPainter(
-              paths: _paths,
-              currentPath: _currentPath,
-            ),
-            child: Container(),
-          ),
-        ],
+    // Build the annotation painter that displays all annotations
+    final annotationPainter = CustomPaint(
+      painter: AnnotationPainter(
+        paths: _paths,
+        currentPath: _currentPath,
       ),
+      child: Container(),
+    );
+
+    // When drawing, wrap with GestureDetector to capture drawing gestures
+    // When not drawing, use IgnorePointer to let all touches pass through to PDF viewer
+    final overlayWidget = widget.isDrawing
+        ? GestureDetector(
+            onPanStart: _onPanStart,
+            onPanUpdate: _onPanUpdate,
+            onPanEnd: _onPanEnd,
+            behavior: HitTestBehavior.opaque,
+            child: annotationPainter,
+          )
+        : IgnorePointer(
+            ignoring: true, // Ignore all touches - let them pass through to PDF viewer
+            child: annotationPainter, // Still visible but doesn't block scrolling
+          );
+
+    return Stack(
+      children: [
+        widget.child, // PDF viewer
+        overlayWidget, // Annotation overlay (interactive only when drawing)
+      ],
     );
   }
 

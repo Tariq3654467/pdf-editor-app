@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import '../services/pdf_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
@@ -42,12 +45,18 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isPortrait = true;
   final TextEditingController _searchController = TextEditingController();
   String? _searchText;
+  final ScrollController _pagePreviewScrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _pdfViewerController = PdfViewerController();
     _loadPDFInfo();
+    
+    // Add listener to scroll controller to debug
+    _pagePreviewScrollController.addListener(() {
+      // This helps ensure the controller is working
+    });
   }
 
   Future<void> _loadPDFInfo() async {
@@ -77,18 +86,139 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       _totalPages = details.document.pages.count;
       _isLoading = false;
     });
+    // Scroll to current page after document loads - use multiple callbacks to ensure it works
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _scrollToCurrentPage();
+      }
+    });
+    // Also try after a longer delay to ensure the preview bar is fully built
+    Future.delayed(const Duration(milliseconds: 500), () {
+      if (mounted) {
+        _scrollToCurrentPage();
+      }
+    });
   }
 
   void _onPageChanged(PdfPageChangedDetails details) {
-    setState(() {
-      _currentPage = details.newPageNumber;
-      // Clear annotations when page changes (optional - you can remove this if you want annotations to persist)
+    final newPage = details.newPageNumber;
+    if (newPage != _currentPage) {
+      setState(() {
+        _currentPage = newPage;
+        // Clear annotations when page changes (optional - you can remove this if you want annotations to persist)
+      });
+      // Scroll to current page in preview bar
+      _scrollToCurrentPage();
+    }
+  }
+
+  void _scrollToCurrentPage() {
+    // Try immediate scroll first, then with delay as fallback
+    _performScroll();
+    
+    // Also try after a delay to ensure controller is ready
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) {
+        _performScroll();
+      }
     });
+    
+    // One more attempt after longer delay
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) {
+        _performScroll();
+      }
+    });
+  }
+
+  void _performScroll() {
+    if (!mounted || _totalPages == 0) {
+      return;
+    }
+    
+    // Wait for scroll controller to be attached - retry if not ready
+    if (!_pagePreviewScrollController.hasClients) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) {
+          _performScroll();
+        }
+      });
+      return;
+    }
+    
+    try {
+      final thumbnailWidth = 60.0;
+      final thumbnailMargin = 8.0;
+      final totalThumbnailWidth = thumbnailWidth + thumbnailMargin;
+      final screenWidth = MediaQuery.of(context).size.width;
+      
+      // Calculate the position of the current page thumbnail
+      final pagePosition = (_currentPage - 1) * totalThumbnailWidth;
+      
+      // Calculate offset to center the current page
+      final targetOffset = pagePosition - (screenWidth / 2) + (thumbnailWidth / 2);
+      
+      final maxScrollExtent = _pagePreviewScrollController.position.maxScrollExtent;
+      final clampedOffset = targetOffset.clamp(0.0, maxScrollExtent > 0 ? maxScrollExtent : 0.0);
+      
+      // Only scroll if the target is different from current position
+      final currentOffset = _pagePreviewScrollController.offset;
+      if ((clampedOffset - currentOffset).abs() > 5) {
+        _pagePreviewScrollController.animateTo(
+          clampedOffset,
+          duration: const Duration(milliseconds: 300),
+          curve: Curves.easeInOut,
+        );
+      }
+    } catch (e) {
+      print('Error in _performScroll: $e');
+    }
   }
 
   void _goToPage(int pageNumber) {
     if (pageNumber >= 1 && pageNumber <= _totalPages) {
+      setState(() {
+        _currentPage = pageNumber;
+      });
       _pdfViewerController.jumpToPage(pageNumber);
+      // Scroll preview bar to show current page
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted) {
+          _scrollToCurrentPage();
+        }
+      });
+    }
+  }
+
+  void _updateCurrentPageFromScroll() {
+    // Try to get the current page from the controller
+    // Since SfPdfViewer doesn't expose a direct way to get current page during scroll,
+    // we rely on onPageChanged callback which should fire when page actually changes
+    // But we can still trigger a scroll update to ensure preview bar is in sync
+    if (mounted) {
+      _scrollToCurrentPage();
+    }
+  }
+
+  PdfScrollDirection _getScrollDirection() {
+    switch (_viewMode) {
+      case 'horizontal':
+        return PdfScrollDirection.horizontal;
+      case 'page':
+      case 'vertical':
+      default:
+        return PdfScrollDirection.vertical;
+    }
+  }
+
+  PdfPageLayoutMode _getPageLayoutMode() {
+    switch (_viewMode) {
+      case 'page':
+        return PdfPageLayoutMode.single;
+      case 'vertical':
+      case 'horizontal':
+      default:
+        return PdfPageLayoutMode.continuous;
     }
   }
 
@@ -100,13 +230,17 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         backgroundColor: Colors.white,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.black),
+          icon: const Icon(
+            Icons.chevron_left,
+            color: Color(0xFF424242), // Dark grey
+            size: 24,
+          ),
           onPressed: () => Navigator.of(context).pop(),
         ),
         title: Text(
           'Page $_currentPage',
           style: const TextStyle(
-            color: Colors.black87,
+            color: Color(0xFF424242),
             fontSize: 18,
             fontWeight: FontWeight.w500,
           ),
@@ -114,25 +248,42 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         centerTitle: false,
         actions: [
           IconButton(
-            icon: const Icon(Icons.search, color: Colors.black),
+            icon: const Icon(
+              Icons.search_outlined,
+              color: Color(0xFF424242), // Dark grey outline style
+              size: 24,
+            ),
             onPressed: _showSearchDialog,
           ),
           IconButton(
             icon: Icon(
-              _isPortrait ? Icons.screen_rotation : Icons.screen_lock_portrait,
-              color: Colors.black,
+              _isPortrait ? Icons.screen_rotation_outlined : Icons.screen_lock_portrait_outlined,
+              color: const Color(0xFF424242), // Dark grey outline style
+              size: 24,
             ),
             onPressed: _toggleOrientation,
           ),
           IconButton(
-            icon: const Icon(Icons.view_module, color: Colors.black),
+            icon: const Icon(
+              Icons.description_outlined,
+              color: Color(0xFF424242), // Dark grey outline style - stacked document icon
+              size: 24,
+            ),
             onPressed: _showViewModeBottomSheet,
           ),
           IconButton(
-            icon: const Icon(Icons.more_vert, color: Colors.black),
+            icon: const Icon(
+              Icons.more_vert,
+              color: Color(0xFF424242), // Dark grey outline style
+              size: 24,
+            ),
             onPressed: _showOptionsBottomSheet,
           ),
         ],
+        iconTheme: const IconThemeData(
+          color: Color(0xFF424242),
+          size: 24,
+        ),
       ),
       body: Stack(
         children: [
@@ -144,17 +295,31 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isEraser: _selectedTool == 'eraser',
             toolType: _selectedTool,
             onClear: () {},
-            child: SfPdfViewer.file(
-              File(widget.filePath),
-              controller: _pdfViewerController,
-              onDocumentLoaded: _onDocumentLoaded,
-              onPageChanged: _onPageChanged,
-              scrollDirection: _viewMode == 'horizontal' 
-                  ? PdfScrollDirection.horizontal 
-                  : PdfScrollDirection.vertical,
-              pageLayoutMode: _viewMode == 'page' 
-                  ? PdfPageLayoutMode.single 
-                  : PdfPageLayoutMode.continuous,
+            child: NotificationListener<ScrollNotification>(
+              onNotification: (notification) {
+                // Detect when user scrolls manually and update preview bar
+                if (notification is ScrollUpdateNotification || 
+                    notification is ScrollEndNotification) {
+                  // Check current page after scroll
+                  Future.delayed(const Duration(milliseconds: 100), () {
+                    if (mounted) {
+                      _updateCurrentPageFromScroll();
+                    }
+                  });
+                }
+                return false;
+              },
+              child: SfPdfViewer.file(
+                File(widget.filePath),
+                key: ValueKey('pdf_viewer_$_viewMode'), // Force rebuild when view mode changes
+                controller: _pdfViewerController,
+                onDocumentLoaded: _onDocumentLoaded,
+                onPageChanged: _onPageChanged,
+                scrollDirection: _getScrollDirection(),
+                pageLayoutMode: _getPageLayoutMode(),
+                enableDoubleTapZooming: true,
+                enableTextSelection: true,
+              ),
             ),
           ),
           // Loading indicator
@@ -777,6 +942,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     ]);
     _pdfViewerController.dispose();
     _searchController.dispose();
+    _pagePreviewScrollController.dispose();
     super.dispose();
   }
 
@@ -860,43 +1026,48 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         value: value,
         groupValue: _viewMode,
         onChanged: (newValue) {
+          final currentPage = _currentPage;
           setState(() {
             _viewMode = newValue!;
           });
           Navigator.pop(context);
+          // Restore current page after view mode change
+          Future.delayed(const Duration(milliseconds: 100), () {
+            if (mounted && currentPage >= 1 && currentPage <= _totalPages) {
+              _pdfViewerController.jumpToPage(currentPage);
+            }
+          });
         },
         activeColor: const Color(0xFFE53935),
       ),
       onTap: () {
+        final currentPage = _currentPage;
         setState(() {
           _viewMode = value;
         });
         Navigator.pop(context);
+        // Restore current page after view mode change
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (mounted && currentPage >= 1 && currentPage <= _totalPages) {
+            _pdfViewerController.jumpToPage(currentPage);
+          }
+        });
       },
     );
   }
 
   Widget _buildPagePreviewBar() {
-    // Calculate which pages to show (current page and adjacent pages)
-    // Always show 3 pages: previous, current, next (if available)
-    int startPage = _currentPage - 1;
-    int endPage = _currentPage + 1;
+    // Show all pages that can fit in the screen width
+    final screenWidth = MediaQuery.of(context).size.width;
+    final thumbnailWidth = 60.0; // Width of each thumbnail
+    final thumbnailMargin = 8.0; // Total horizontal margin (4px on each side)
+    final totalThumbnailWidth = thumbnailWidth + thumbnailMargin;
     
-    // Adjust boundaries
-    if (startPage < 1) {
-      startPage = 1;
-      endPage = (_totalPages >= 3) ? 3 : _totalPages;
-    }
-    if (endPage > _totalPages) {
-      endPage = _totalPages;
-      startPage = (_totalPages >= 3) ? _totalPages - 2 : 1;
-    }
+    // Calculate how many thumbnails can fit (leave some padding)
+    final availableWidth = screenWidth - 32; // Padding on sides
+    final maxVisibleThumbnails = (availableWidth / totalThumbnailWidth).floor();
     
-    final pagesToShow = <int>[];
-    for (int i = startPage; i <= endPage; i++) {
-      pagesToShow.add(i);
-    }
-
+    // Show all pages in a scrollable list
     return Container(
       height: 100,
       decoration: BoxDecoration(
@@ -909,73 +1080,58 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (_currentPage > 1)
-            IconButton(
-              icon: const Icon(Icons.chevron_left),
-              onPressed: () {
-                _goToPage(_currentPage - 1);
-              },
-            ),
-          Expanded(
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 8),
-              itemCount: pagesToShow.length,
-              itemBuilder: (context, index) {
-                final pageNumber = pagesToShow[index];
-                final isActive = _currentPage == pageNumber;
-                return GestureDetector(
-                  onTap: () => _goToPage(pageNumber),
-                  child: Container(
-                    width: 60,
-                    height: 80,
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    decoration: BoxDecoration(
-                      color: isActive ? Colors.white : Colors.grey[200],
-                      border: Border.all(
-                        color: isActive
-                            ? const Color(0xFFE53935)
-                            : Colors.grey[300]!,
-                        width: isActive ? 2 : 1,
-                      ),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        // Page thumbnail
-                        _buildPageThumbnail(pageNumber, isActive),
-                        const SizedBox(height: 4),
-                        Text(
-                          '$pageNumber',
-                          style: TextStyle(
-                            color: isActive
-                                ? const Color(0xFFE53935)
-                                : Colors.grey[600],
-                            fontSize: 10,
-                            fontWeight: isActive
-                                ? FontWeight.bold
-                                : FontWeight.normal,
-                          ),
-                        ),
-                      ],
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        itemCount: _totalPages,
+        controller: _pagePreviewScrollController,
+        physics: const BouncingScrollPhysics(),
+        itemBuilder: (context, index) {
+          final pageNumber = index + 1;
+          final isActive = _currentPage == pageNumber;
+          return GestureDetector(
+            onTap: () => _goToPage(pageNumber),
+            child: Container(
+              width: thumbnailWidth,
+              height: 80,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                color: isActive ? Colors.white : Colors.grey[200],
+                border: Border.all(
+                  color: isActive
+                      ? const Color(0xFFE53935)
+                      : Colors.grey[300]!,
+                  width: isActive ? 2 : 1,
+                ),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Page thumbnail
+                  SizedBox(
+                    width: 40,
+                    height: 50,
+                    child: _buildPageThumbnail(pageNumber, isActive),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    '$pageNumber',
+                    style: TextStyle(
+                      color: isActive
+                          ? const Color(0xFFE53935)
+                          : Colors.grey[600],
+                      fontSize: 10,
+                      fontWeight: isActive
+                          ? FontWeight.bold
+                          : FontWeight.normal,
                     ),
                   ),
-                );
-              },
+                ],
+              ),
             ),
-          ),
-          if (_currentPage < _totalPages)
-            IconButton(
-              icon: const Icon(Icons.chevron_right),
-              onPressed: () {
-                _goToPage(_currentPage + 1);
-              },
-            ),
-        ],
+          );
+        },
       ),
     );
   }
@@ -1001,15 +1157,13 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       ),
       child: Stack(
         children: [
-          // Page preview placeholder with lines to simulate text
+          // Actual PDF page thumbnail using small viewer
           Positioned.fill(
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(4),
-              ),
-              child: CustomPaint(
-                painter: PagePreviewPainter(),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(4),
+              child: _PDFThumbnailViewer(
+                filePath: widget.filePath,
+                pageNumber: pageNumber,
               ),
             ),
           ),
@@ -1018,13 +1172,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             top: 2,
             left: 0,
             right: 0,
-            child: Text(
-              '$pageNumber',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: isActive ? const Color(0xFFE53935) : Colors.grey[700],
-                fontSize: 9,
-                fontWeight: FontWeight.bold,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(
+                color: Colors.black.withOpacity(0.6),
+                borderRadius: BorderRadius.circular(2),
+              ),
+              child: Text(
+                '$pageNumber',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 8,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ),
@@ -1034,24 +1195,80 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 }
 
-class PagePreviewPainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.grey[300]!
-      ..strokeWidth = 0.5;
+// Widget to display a single PDF page as thumbnail
+class _PDFThumbnailViewer extends StatefulWidget {
+  final String filePath;
+  final int pageNumber;
 
-    // Draw horizontal lines to simulate text lines
-    for (double y = 8; y < size.height - 4; y += 3) {
-      canvas.drawLine(
-        Offset(3, y),
-        Offset(size.width - 3, y),
-        paint,
-      );
-    }
+  const _PDFThumbnailViewer({
+    required this.filePath,
+    required this.pageNumber,
+  });
+
+  @override
+  State<_PDFThumbnailViewer> createState() => _PDFThumbnailViewerState();
+}
+
+class _PDFThumbnailViewerState extends State<_PDFThumbnailViewer> {
+  late PdfViewerController _controller;
+  bool _isLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = PdfViewerController();
+    // Jump to the specific page after a short delay
+    Future.delayed(const Duration(milliseconds: 50), () {
+      if (mounted) {
+        _controller.jumpToPage(widget.pageNumber);
+        setState(() {
+          _isLoaded = true;
+        });
+      }
+    });
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.white,
+      child: _isLoaded
+          ? SfPdfViewer.file(
+              File(widget.filePath),
+              controller: _controller,
+              enableDoubleTapZooming: false,
+              enableTextSelection: false,
+              canShowScrollHead: false,
+              canShowScrollStatus: false,
+              canShowPaginationDialog: false,
+              canShowPasswordDialog: false,
+              pageLayoutMode: PdfPageLayoutMode.single,
+              scrollDirection: PdfScrollDirection.horizontal,
+              onDocumentLoaded: (details) {
+                if (mounted) {
+                  _controller.jumpToPage(widget.pageNumber);
+                }
+              },
+            )
+          : Container(
+              color: Colors.grey[200],
+              child: const Center(
+                child: SizedBox(
+                  width: 10,
+                  height: 10,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1,
+                  ),
+                ),
+              ),
+            ),
+    );
+  }
 }
 

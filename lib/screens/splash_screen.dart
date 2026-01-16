@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:path/path.dart' as path;
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
@@ -542,9 +543,9 @@ class _MyHomePageState extends State<MyHomePage> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           Icon(
-                            Icons.home_outlined,
+                            Icons.home,
                             color: _selectedBottomNavIndex == 0
-                                ? const Color(0xFFE53935)
+                                ? const Color(0xFFE53935) // Reddish-pink when active
                                 : const Color(0xFFBDBDBD),
                             size: 24,
                           ),
@@ -553,7 +554,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             'Home',
                             style: TextStyle(
                               color: _selectedBottomNavIndex == 0
-                                  ? const Color(0xFFE53935)
+                                  ? const Color(0xFFE53935) // Reddish-pink when active
                                   : const Color(0xFFBDBDBD),
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
@@ -584,7 +585,7 @@ class _MyHomePageState extends State<MyHomePage> {
                             style: TextStyle(
                               color: _selectedBottomNavIndex == 1
                                   ? const Color(0xFFE53935)
-                                  : const Color(0xFFBDBDBD),
+                                  : const Color(0xFF9E9E9E), // Light grey when inactive
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -600,21 +601,14 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        backgroundColor: const Color(0xFFE53935),
+        backgroundColor: const Color(0xFFE53935), // Red circular button
         shape: const CircleBorder(),
+        elevation: 4,
         onPressed: _openCamera,
-        child: Container(
-          width: 32,
-          height: 32,
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: const Icon(
-            Icons.document_scanner,
-            color: Color(0xFFE53935),
-            size: 20,
-          ),
+        child: const Icon(
+          Icons.crop_free, // Scanner icon - square with four corner squares (focus frame)
+          color: Colors.white, // White icon on red background
+          size: 28,
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
@@ -973,6 +967,281 @@ class _MyHomePageState extends State<MyHomePage> {
             ],
           ),
         ),
+      ),
+    );
+  }
+
+  void _showPDFOptionsMenu(BuildContext context, PDFFile pdf) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(20),
+            topRight: Radius.circular(20),
+          ),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Drag handle
+            Container(
+              margin: const EdgeInsets.only(top: 12, bottom: 8),
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            if (pdf.filePath != null) ...[
+              ListTile(
+                leading: const Icon(Icons.drive_file_rename_outline, color: Color(0xFF263238)),
+                title: const Text(
+                  'Rename',
+                  style: TextStyle(color: Color(0xFF263238), fontSize: 16),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _renamePDF(pdf);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.share, color: Color(0xFF263238)),
+                title: const Text(
+                  'Share',
+                  style: TextStyle(color: Color(0xFF263238), fontSize: 16),
+                ),
+                onTap: () async {
+                  Navigator.pop(context);
+                  await _sharePDF(pdf);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text(
+                  'Delete',
+                  style: TextStyle(color: Colors.red, fontSize: 16),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _deletePDF(pdf);
+                },
+              ),
+            ],
+            SizedBox(height: MediaQuery.of(context).padding.bottom),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _sharePDF(PDFFile pdf) async {
+    try {
+      if (pdf.filePath != null) {
+        final file = File(pdf.filePath!);
+        if (await file.exists()) {
+          await Share.shareXFiles(
+            [XFile(pdf.filePath!)],
+            text: 'Check out this PDF: ${pdf.name}',
+          );
+        } else {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('PDF file not found'),
+              ),
+            );
+          }
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error sharing PDF: $e'),
+          ),
+        );
+      }
+    }
+  }
+
+  void _deletePDF(PDFFile pdf) {
+    if (pdf.filePath == null) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete PDF'),
+        content: Text('Are you sure you want to delete "${pdf.name}"?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              try {
+                final file = File(pdf.filePath!);
+                if (await file.exists()) {
+                  await file.delete();
+                  // Remove from bookmarks
+                  await PDFPreferencesService.setBookmark(pdf.filePath!, false);
+                  // Reload PDFs
+                  await _loadPDFs();
+                }
+                if (mounted) {
+                  Navigator.pop(context); // Close dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('PDF deleted successfully'),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error deleting PDF: $e'),
+                    ),
+                  );
+                }
+              }
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _renamePDF(PDFFile pdf) {
+    if (pdf.filePath == null) return;
+
+    final nameController = TextEditingController(
+      text: path.basenameWithoutExtension(pdf.filePath!),
+    );
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename PDF'),
+        content: TextField(
+          controller: nameController,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: 'Enter new name',
+            border: OutlineInputBorder(),
+            suffixText: '.pdf',
+          ),
+          textCapitalization: TextCapitalization.words,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final newName = nameController.text.trim();
+              
+              if (newName.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter a valid name'),
+                  ),
+                );
+                return;
+              }
+
+              // Validate name (no invalid characters)
+              if (newName.contains(RegExp(r'[<>:"/\\|?*]'))) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Name contains invalid characters'),
+                  ),
+                );
+                return;
+              }
+
+              try {
+                final oldFile = File(pdf.filePath!);
+                if (!await oldFile.exists()) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('PDF file not found'),
+                    ),
+                  );
+                  return;
+                }
+
+                // Get directory and create new path
+                final directory = path.dirname(pdf.filePath!);
+                final newFileName = '$newName.pdf';
+                final newPath = path.join(directory, newFileName);
+
+                // Check if file with new name already exists
+                final newFile = File(newPath);
+                if (await newFile.exists() && newPath != pdf.filePath) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('A file with this name already exists'),
+                    ),
+                  );
+                  return;
+                }
+
+                // Rename the file
+                await oldFile.rename(newPath);
+
+                // Update bookmark if file was bookmarked
+                final wasBookmarked = await PDFPreferencesService.isBookmarked(pdf.filePath!);
+                if (wasBookmarked) {
+                  await PDFPreferencesService.setBookmark(pdf.filePath!, false);
+                  await PDFPreferencesService.setBookmark(newPath, true);
+                }
+
+                // Update recent access
+                final recentAccess = await PDFPreferencesService.getRecentAccess();
+                if (recentAccess.containsKey(pdf.filePath!)) {
+                  final lastAccessed = recentAccess[pdf.filePath!];
+                  recentAccess.remove(pdf.filePath!);
+                  if (lastAccessed != null) {
+                    await PDFPreferencesService.setLastAccessed(newPath);
+                  }
+                }
+
+                // Reload PDFs
+                await _loadPDFs();
+
+                if (mounted) {
+                  Navigator.pop(context); // Close dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('PDF renamed successfully'),
+                    ),
+                  );
+                }
+              } catch (e) {
+                if (mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Error renaming PDF: $e'),
+                    ),
+                  );
+                }
+              }
+            },
+            child: const Text('Rename'),
+          ),
+        ],
       ),
     );
   }

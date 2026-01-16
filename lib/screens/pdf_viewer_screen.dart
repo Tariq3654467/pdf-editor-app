@@ -72,17 +72,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     try {
       final isBookmarked = await PDFPreferencesService.isBookmarked(widget.filePath);
       if (!isBookmarked) {
+        // Auto-bookmark when PDF is opened for the first time
         await PDFPreferencesService.setBookmark(widget.filePath, true);
-        setState(() {
-          _isFavorite = true;
-        });
-      } else {
-        // Load existing bookmark status
-        setState(() {
-          _isFavorite = true;
-        });
       }
-      // Also update last accessed time
+      // Update last accessed time
       await PDFPreferencesService.setLastAccessed(widget.filePath);
     } catch (e) {
       print('Error auto-bookmarking PDF: $e');

@@ -4,6 +4,7 @@ class PDFFile {
   String size;
   bool isFavorite;
   String? filePath; // Path to the actual PDF file
+  DateTime? lastAccessed; // When the PDF was last opened
 
   PDFFile({
     required this.name,
@@ -11,5 +12,6 @@ class PDFFile {
     required this.size,
     required this.isFavorite,
     this.filePath,
+    this.lastAccessed,
   });
 }

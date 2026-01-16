@@ -73,6 +73,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   @override
   void dispose() {
     _pdfViewerController.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
@@ -811,17 +812,17 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               ),
             ),
             _buildViewModeOption(
-              icon: Icons.swap_vert,
+              icon: Icons.view_column,
               title: 'Vertical scroll',
               value: 'vertical',
             ),
             _buildViewModeOption(
-              icon: Icons.swap_horiz,
+              icon: Icons.view_agenda,
               title: 'Horizontal scroll',
               value: 'horizontal',
             ),
             _buildViewModeOption(
-              icon: Icons.pages,
+              icon: Icons.view_module,
               title: 'Page by page',
               value: 'page',
             ),

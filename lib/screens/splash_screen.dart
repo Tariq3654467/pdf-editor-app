@@ -5,6 +5,7 @@ import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
+import '../services/pdf_preferences_service.dart';
 import '../models/pdf_file.dart';
 import 'pdf_viewer_screen.dart';
 import 'settings_screen.dart';
@@ -327,6 +328,25 @@ class _MyHomePageState extends State<MyHomePage> {
       pdfFiles = loadedPDFs;
       _isLoading = false;
     });
+  }
+
+  List<PDFFile> _getFilteredPDFs() {
+    switch (_selectedTabIndex) {
+      case 0: // My file - show all
+        return pdfFiles;
+      case 1: // Recent - show files sorted by last accessed
+        final recentFiles = pdfFiles.where((pdf) => pdf.lastAccessed != null).toList();
+        recentFiles.sort((a, b) {
+          if (a.lastAccessed == null) return 1;
+          if (b.lastAccessed == null) return -1;
+          return b.lastAccessed!.compareTo(a.lastAccessed!);
+        });
+        return recentFiles;
+      case 2: // Bookmarks - show only bookmarked files
+        return pdfFiles.where((pdf) => pdf.isFavorite).toList();
+      default:
+        return pdfFiles;
+    }
   }
 
   Future<void> _pickAndAddPDF() async {
@@ -723,9 +743,9 @@ class _MyHomePageState extends State<MyHomePage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                '116 Documents',
-                style: TextStyle(
+              Text(
+                '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
+                style: const TextStyle(
                   color: Color(0xFF263238),
                   fontSize: 20,
                   fontWeight: FontWeight.bold,
@@ -762,59 +782,99 @@ class _MyHomePageState extends State<MyHomePage> {
         Expanded(
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
-              : pdfFiles.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          const Icon(
-                            Icons.description_outlined,
-                            size: 64,
-                            color: Color(0xFFBDBDBD),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'No PDFs found',
-                            style: TextStyle(
-                              color: Color(0xFF9E9E9E),
-                              fontSize: 16,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          ElevatedButton(
-                            onPressed: _pickAndAddPDF,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFFE53935),
-                            ),
-                            child: const Text(
-                              'Add PDF',
-                              style: TextStyle(color: Colors.white),
-                            ),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 16,
-                        vertical: 8,
-                      ),
-                      itemCount: pdfFiles.length,
-                      itemBuilder: (context, index) {
-                        return _buildPDFTile(pdfFiles[index]);
-                      },
-                    ),
+              : _buildPDFList(),
         ),
       ],
       ),
     );
   }
 
+  Widget _buildPDFList() {
+    final filteredPDFs = _getFilteredPDFs();
+    
+    if (filteredPDFs.isEmpty) {
+      String emptyMessage;
+      String emptyTitle;
+      
+      switch (_selectedTabIndex) {
+        case 1:
+          emptyTitle = 'No Recent Files';
+          emptyMessage = 'Files you open will appear here';
+          break;
+        case 2:
+          emptyTitle = 'No Bookmarks';
+          emptyMessage = 'Tap the star icon to bookmark a file';
+          break;
+        default:
+          emptyTitle = 'No PDFs found';
+          emptyMessage = 'Add a PDF to get started';
+      }
+      
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(
+              Icons.description_outlined,
+              size: 64,
+              color: Color(0xFFBDBDBD),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              emptyTitle,
+              style: const TextStyle(
+                color: Color(0xFF9E9E9E),
+                fontSize: 16,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              emptyMessage,
+              style: const TextStyle(
+                color: Color(0xFF9E9E9E),
+                fontSize: 14,
+              ),
+            ),
+            if (_selectedTabIndex == 0) ...[
+              const SizedBox(height: 16),
+              ElevatedButton(
+                onPressed: _pickAndAddPDF,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE53935),
+                ),
+                child: const Text(
+                  'Add PDF',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+    
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      itemCount: filteredPDFs.length,
+      itemBuilder: (context, index) {
+        return _buildPDFTile(filteredPDFs[index]);
+      },
+    );
+  }
+
   Widget _buildPDFTile(PDFFile pdf) {
     return GestureDetector(
-      onTap: () {
+      onTap: () async {
         if (pdf.filePath != null) {
-          Navigator.of(context).push(
+          // Track that this PDF was accessed
+          await PDFPreferencesService.setLastAccessed(pdf.filePath!);
+          
+          // Navigate to PDF viewer and reload when returning
+          await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => PDFViewerScreen(
                 filePath: pdf.filePath!,
@@ -822,6 +882,9 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
             ),
           );
+          
+          // Reload PDFs to update recent list and bookmarks
+          await _loadPDFs();
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -877,10 +940,21 @@ class _MyHomePageState extends State<MyHomePage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               IconButton(
-                onPressed: () {
+                onPressed: () async {
+                  final newBookmarkStatus = !pdf.isFavorite;
+                  
+                  if (pdf.filePath != null) {
+                    await PDFPreferencesService.setBookmark(
+                      pdf.filePath!,
+                      newBookmarkStatus,
+                    );
+                  }
+                  
                   setState(() {
-                    pdfFiles[pdfFiles.indexOf(pdf)].isFavorite =
-                        !pdfFiles[pdfFiles.indexOf(pdf)].isFavorite;
+                    final index = pdfFiles.indexWhere((p) => p.filePath == pdf.filePath);
+                    if (index != -1) {
+                      pdfFiles[index].isFavorite = newBookmarkStatus;
+                    }
                   });
                 },
                 icon: Icon(

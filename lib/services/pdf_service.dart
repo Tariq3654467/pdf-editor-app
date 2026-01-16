@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import '../models/pdf_file.dart';
+import 'pdf_preferences_service.dart';
 
 class PDFService {
   static Future<List<PDFFile>> loadPDFsFromDevice() async {
@@ -18,6 +19,10 @@ class PDFService {
         await pdfDirectory.create(recursive: true);
       }
 
+      // Load bookmarks and recent access from preferences
+      final bookmarks = await PDFPreferencesService.getBookmarks();
+      final recentAccess = await PDFPreferencesService.getRecentAccess();
+
       // Scan for PDF files
       final files = pdfDirectory.listSync();
       for (var file in files) {
@@ -27,6 +32,18 @@ class PDFService {
           final fileSize = formatFileSize(stat.size);
           final modifiedDate = stat.modified;
 
+          // Get bookmark status and last accessed time
+          final isBookmarked = bookmarks.contains(file.path);
+          final lastAccessedStr = recentAccess[file.path];
+          DateTime? lastAccessed;
+          if (lastAccessedStr != null) {
+            try {
+              lastAccessed = DateTime.parse(lastAccessedStr);
+            } catch (e) {
+              lastAccessed = null;
+            }
+          }
+
           pdfFiles.add(
             PDFFile(
               name: fileName.length > 25
@@ -34,8 +51,9 @@ class PDFService {
                   : fileName,
               date: formatDate(modifiedDate),
               size: fileSize,
-              isFavorite: false,
+              isFavorite: isBookmarked,
               filePath: file.path,
+              lastAccessed: lastAccessed,
             ),
           );
         }

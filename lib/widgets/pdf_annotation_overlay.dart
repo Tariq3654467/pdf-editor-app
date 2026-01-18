@@ -8,6 +8,7 @@ class AnnotationPoint {
   final String toolType; // 'pen', 'highlight', 'underline'
   final int pageNumber; // Page number this annotation belongs to
   final Offset normalizedPoint; // Normalized coordinates (0-1 range) relative to page
+  final double? documentY; // Absolute Y position in document (screen Y + scroll offset when drawn)
 
   AnnotationPoint({
     required this.point,
@@ -17,6 +18,7 @@ class AnnotationPoint {
     this.toolType = 'pen',
     required this.pageNumber,
     required this.normalizedPoint,
+    this.documentY, // Store absolute document position (nullable for backward compatibility)
   });
 }
 
@@ -28,6 +30,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final bool isEraser;
   final String toolType; // 'pen', 'highlight', 'underline'
   final int currentPage; // Current page number
+  final double scrollOffset; // Current scroll offset
   final VoidCallback? onClear;
   final Function(bool)? onUndoStateChanged;
   final Function(bool)? onRedoStateChanged;
@@ -41,6 +44,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
     required this.isEraser,
     this.toolType = 'pen',
     required this.currentPage,
+    this.scrollOffset = 0.0,
     this.onClear,
     this.onUndoStateChanged,
     this.onRedoStateChanged,
@@ -71,6 +75,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           : Offset.zero;
       
       setState(() {
+        // Store absolute document position (screen Y + scroll offset)
+        final documentY = details.localPosition.dy + widget.scrollOffset;
         _currentPath = [
           AnnotationPoint(
             point: details.localPosition,
@@ -80,6 +86,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             toolType: widget.toolType,
             pageNumber: widget.currentPage,
             normalizedPoint: normalizedPoint,
+            documentY: documentY, // Store absolute position in document
           ),
         ];
       });
@@ -101,10 +108,14 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           : Offset.zero;
       
       setState(() {
+        // Store absolute document position (screen Y + scroll offset)
+        final documentY = details.localPosition.dy + widget.scrollOffset;
+        
         // For underline, only update X position to keep horizontal line
         if (widget.toolType == 'underline') {
           final startY = _currentPath.first.point.dy;
           final startNormalizedY = _currentPath.first.normalizedPoint.dy;
+          final startDocumentY = _currentPath.first.documentY;
           _currentPath.add(
             AnnotationPoint(
               point: Offset(details.localPosition.dx, startY),
@@ -113,6 +124,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
               toolType: widget.toolType,
               pageNumber: widget.currentPage,
               normalizedPoint: Offset(normalizedPoint.dx, startNormalizedY),
+              documentY: startDocumentY, // Keep same document Y for underline
             ),
           );
         } else {
@@ -125,6 +137,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
               toolType: widget.toolType,
               pageNumber: widget.currentPage,
               normalizedPoint: normalizedPoint,
+              documentY: documentY, // Store absolute position in document
             ),
           );
         }
@@ -192,6 +205,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             currentPath: _currentPath,
             overlaySize: constraints.biggest,
             currentPage: widget.currentPage,
+            scrollOffset: widget.scrollOffset,
           ),
           child: Container(),
         );
@@ -213,10 +227,15 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             child: annotationPainter, // Still visible but doesn't block scrolling
           );
 
+    // The overlay is positioned on top of the PDF viewer
+    // Annotations are stored with normalized coordinates and will render
+    // at their correct positions relative to the PDF content
     return Stack(
       children: [
         widget.child, // PDF viewer
-        overlayWidget, // Annotation overlay (interactive only when drawing)
+        Positioned.fill(
+          child: overlayWidget, // Annotation overlay
+        ),
       ],
     );
   }
@@ -227,17 +246,43 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 class AnnotationPainter extends CustomPainter {
   final List<List<AnnotationPoint>> paths;
   final List<AnnotationPoint> currentPath;
+  final Size overlaySize;
+  final int currentPage;
+  final double scrollOffset;
 
   AnnotationPainter({
     required this.paths,
     required this.currentPath,
+    required this.overlaySize,
+    required this.currentPage,
+    required this.scrollOffset,
   });
+
+  // Convert document coordinates to screen coordinates
+  // documentY is the absolute position in the document
+  // screenY = documentY - currentScrollOffset
+  // If documentY is null (old annotations), use normalized coordinates
+  Offset _documentToScreen(Offset normalizedPoint, double? documentY) {
+    final screenX = normalizedPoint.dx * overlaySize.width;
+    final screenY = documentY != null
+        ? documentY - scrollOffset // Convert document position to screen position
+        : normalizedPoint.dy * overlaySize.height; // Fallback for old annotations
+    return Offset(screenX, screenY);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Draw all completed paths
+    // Update overlay size if it changed
+    final effectiveSize = overlaySize.width > 0 && overlaySize.height > 0 
+        ? overlaySize 
+        : size;
+    
+    // Draw all completed paths - only show annotations for current page
     for (var path in paths) {
       if (path.isEmpty) continue;
+      
+      // Only draw annotations for the current page
+      if (path.first.pageNumber != currentPage) continue;
       
       final firstPoint = path.first;
       final paint = Paint()
@@ -258,18 +303,21 @@ class AnnotationPainter extends CustomPainter {
       }
 
       if (path.length >= 2) {
+        // Convert document coordinates to screen coordinates
+        final screenPoints = path.map((p) => _documentToScreen(p.normalizedPoint, p.documentY)).toList();
+        
         if (firstPoint.toolType == 'underline') {
           // Draw horizontal line for underline
-          final minX = path.map((p) => p.point.dx).reduce((a, b) => a < b ? a : b);
-          final maxX = path.map((p) => p.point.dx).reduce((a, b) => a > b ? a : b);
-          final y = path.first.point.dy;
+          final minX = screenPoints.map((p) => p.dx).reduce((a, b) => a < b ? a : b);
+          final maxX = screenPoints.map((p) => p.dx).reduce((a, b) => a > b ? a : b);
+          final y = screenPoints.first.dy;
           canvas.drawLine(Offset(minX, y), Offset(maxX, y), paint);
         } else if (firstPoint.toolType == 'highlight') {
           // Draw filled rectangle for highlight
-          final minX = path.map((p) => p.point.dx).reduce((a, b) => a < b ? a : b);
-          final maxX = path.map((p) => p.point.dx).reduce((a, b) => a > b ? a : b);
-          final minY = path.map((p) => p.point.dy).reduce((a, b) => a < b ? a : b);
-          final maxY = path.map((p) => p.point.dy).reduce((a, b) => a > b ? a : b);
+          final minX = screenPoints.map((p) => p.dx).reduce((a, b) => a < b ? a : b);
+          final maxX = screenPoints.map((p) => p.dx).reduce((a, b) => a > b ? a : b);
+          final minY = screenPoints.map((p) => p.dy).reduce((a, b) => a < b ? a : b);
+          final maxY = screenPoints.map((p) => p.dy).reduce((a, b) => a > b ? a : b);
           canvas.drawRect(
             Rect.fromLTRB(minX, minY - firstPoint.strokeWidth / 2, maxX, maxY + firstPoint.strokeWidth / 2),
             paint,
@@ -277,16 +325,16 @@ class AnnotationPainter extends CustomPainter {
         } else {
           // Draw freehand path for pen
           final drawingPath = Path();
-          drawingPath.moveTo(path[0].point.dx, path[0].point.dy);
-          for (int i = 1; i < path.length; i++) {
-            drawingPath.lineTo(path[i].point.dx, path[i].point.dy);
+          drawingPath.moveTo(screenPoints[0].dx, screenPoints[0].dy);
+          for (int i = 1; i < screenPoints.length; i++) {
+            drawingPath.lineTo(screenPoints[i].dx, screenPoints[i].dy);
           }
           canvas.drawPath(drawingPath, paint);
         }
       }
     }
 
-    // Draw current path being drawn
+    // Draw current path being drawn (always on current page)
     if (currentPath.length >= 2) {
       final firstPoint = currentPath.first;
       final paint = Paint()
@@ -306,18 +354,21 @@ class AnnotationPainter extends CustomPainter {
         paint.blendMode = BlendMode.clear;
       }
 
+      // Convert document coordinates to screen coordinates
+      final screenPoints = currentPath.map((p) => _documentToScreen(p.normalizedPoint, p.documentY)).toList();
+
       if (firstPoint.toolType == 'underline') {
         // Draw horizontal line for underline
-        final minX = currentPath.map((p) => p.point.dx).reduce((a, b) => a < b ? a : b);
-        final maxX = currentPath.map((p) => p.point.dx).reduce((a, b) => a > b ? a : b);
-        final y = currentPath.first.point.dy;
+        final minX = screenPoints.map((p) => p.dx).reduce((a, b) => a < b ? a : b);
+        final maxX = screenPoints.map((p) => p.dx).reduce((a, b) => a > b ? a : b);
+        final y = screenPoints.first.dy;
         canvas.drawLine(Offset(minX, y), Offset(maxX, y), paint);
       } else if (firstPoint.toolType == 'highlight') {
         // Draw filled rectangle for highlight
-        final minX = currentPath.map((p) => p.point.dx).reduce((a, b) => a < b ? a : b);
-        final maxX = currentPath.map((p) => p.point.dx).reduce((a, b) => a > b ? a : b);
-        final minY = currentPath.map((p) => p.point.dy).reduce((a, b) => a < b ? a : b);
-        final maxY = currentPath.map((p) => p.point.dy).reduce((a, b) => a > b ? a : b);
+        final minX = screenPoints.map((p) => p.dx).reduce((a, b) => a < b ? a : b);
+        final maxX = screenPoints.map((p) => p.dx).reduce((a, b) => a > b ? a : b);
+        final minY = screenPoints.map((p) => p.dy).reduce((a, b) => a < b ? a : b);
+        final maxY = screenPoints.map((p) => p.dy).reduce((a, b) => a > b ? a : b);
         canvas.drawRect(
           Rect.fromLTRB(minX, minY - firstPoint.strokeWidth / 2, maxX, maxY + firstPoint.strokeWidth / 2),
           paint,
@@ -325,9 +376,9 @@ class AnnotationPainter extends CustomPainter {
       } else {
         // Draw freehand path for pen
         final drawingPath = Path();
-        drawingPath.moveTo(currentPath[0].point.dx, currentPath[0].point.dy);
-        for (int i = 1; i < currentPath.length; i++) {
-          drawingPath.lineTo(currentPath[i].point.dx, currentPath[i].point.dy);
+        drawingPath.moveTo(screenPoints[0].dx, screenPoints[0].dy);
+        for (int i = 1; i < screenPoints.length; i++) {
+          drawingPath.lineTo(screenPoints[i].dx, screenPoints[i].dy);
         }
         canvas.drawPath(drawingPath, paint);
       }
@@ -335,6 +386,14 @@ class AnnotationPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+  bool shouldRepaint(covariant CustomPainter oldDelegate) {
+    if (oldDelegate is AnnotationPainter) {
+      return oldDelegate.overlaySize != overlaySize ||
+          oldDelegate.currentPage != currentPage ||
+          oldDelegate.paths.length != paths.length ||
+          oldDelegate.currentPath.length != currentPath.length;
+    }
+    return true;
+  }
 }
 

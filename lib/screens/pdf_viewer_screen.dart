@@ -42,6 +42,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Timer? _scrollCheckTimer;
   bool _isScrolling = false;
   bool _showPagePreview = true; // Control visibility of page preview bar
+  double _pdfScrollOffset = 0.0; // Track PDF vertical scroll offset for annotations
   
   // Annotation/Editing state
   bool _isEditingMode = false;
@@ -400,6 +401,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isDrawing: _isEditingMode && (_selectedTool == 'pen' || _selectedTool == 'highlight' || _selectedTool == 'underline' || _selectedTool == 'eraser'),
             isEraser: _selectedTool == 'eraser',
             toolType: _selectedTool,
+            currentPage: _currentPage,
+            scrollOffset: _pdfScrollOffset,
             onClear: () {},
             onUndoStateChanged: (canUndo) {
               setState(() {
@@ -421,6 +424,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 } else if (notification is ScrollUpdateNotification) {
                   // Update during scroll for real-time feedback
                   _isScrolling = true;
+                  // Track scroll offset for annotation positioning
+                  if (mounted) {
+                    setState(() {
+                      _pdfScrollOffset = notification.metrics.pixels;
+                    });
+                  }
                   Future.delayed(const Duration(milliseconds: 50), () {
                     if (mounted) {
                       _updateCurrentPageFromScroll();
@@ -430,6 +439,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   // Stop periodic checks and do final update
                   _isScrolling = false;
                   _stopScrollCheckTimer();
+                  // Update final scroll offset
+                  if (mounted) {
+                    setState(() {
+                      _pdfScrollOffset = notification.metrics.pixels;
+                    });
+                  }
                   Future.delayed(const Duration(milliseconds: 150), () {
                     if (mounted) {
                       _updateCurrentPageFromScroll();
@@ -821,7 +836,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             onTap: _printPDF,
           ),
           _buildOptionTile(
-            icon: Icons.save,
+            icon: Icons.save_alt,
             title: 'Save to device',
             onTap: _saveToDevice,
           ),

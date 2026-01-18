@@ -23,23 +23,25 @@ class _MyAppState extends State<MyApp> {
 
   Future<void> _getInitialFileIntent() async {
     try {
-      final String? fileUri = await platform.invokeMethod('getInitialFileIntent');
-      if (fileUri != null && mounted) {
-        // Convert URI to file path
-        final uri = Uri.parse(fileUri);
-        if (uri.scheme == 'file') {
-          final filePath = uri.path;
-          if (File(filePath).existsSync()) {
-            setState(() {
-              _initialFilePath = filePath;
-            });
-          }
-        } else if (uri.scheme == 'content' && Platform.isAndroid) {
-          // For content:// URIs, we'll need to handle via file_picker or similar
-          // For now, try to extract path
+      final String? filePath = await platform.invokeMethod('getInitialFileIntent');
+      if (filePath != null && mounted) {
+        // The native code should have already handled content:// URIs and returned a file path
+        final file = File(filePath);
+        if (file.existsSync()) {
           setState(() {
-            _initialFilePath = fileUri;
+            _initialFilePath = filePath;
           });
+        } else {
+          // If it's still a URI string, try to parse it
+          final uri = Uri.parse(filePath);
+          if (uri.scheme == 'file') {
+            final path = uri.path;
+            if (File(path).existsSync()) {
+              setState(() {
+                _initialFilePath = path;
+              });
+            }
+          }
         }
       }
     } catch (e) {

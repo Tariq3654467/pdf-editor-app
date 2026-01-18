@@ -514,7 +514,12 @@ class _MyHomePageState extends State<MyHomePage> {
               ),
               child: _selectedBottomNavIndex == 0
                   ? _buildHomeContent()
-                  : const ToolsScreen(),
+                  : ToolsScreen(
+                      onOperationComplete: () {
+                        _loadPDFs();
+                        _loadToolsHistory();
+                      },
+                    ),
             ),
           ),
         ],

@@ -545,9 +545,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
           // Undo button
           _buildToolButton(
             icon: Icons.undo,
@@ -627,7 +629,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             },
             color: Colors.green,
           ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -910,6 +913,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         }
 
         if (mergedPath != null) {
+          // Save to history
+          await PDFPreferencesService.addToolsHistory(
+            'merge',
+            widget.filePath,
+            resultPath: mergedPath,
+          );
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
@@ -995,6 +1004,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       }
 
       if (splitFiles.isNotEmpty) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'split',
+          widget.filePath,
+          resultPath: splitFiles.first,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

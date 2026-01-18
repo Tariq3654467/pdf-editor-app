@@ -4,6 +4,7 @@ import 'dart:convert';
 class PDFPreferencesService {
   static const String _bookmarksKey = 'pdf_bookmarks';
   static const String _recentAccessKey = 'pdf_recent_access';
+  static const String _toolsHistoryKey = 'pdf_tools_history';
 
   // Save bookmark status for a PDF file
   static Future<void> setBookmark(String filePath, bool isBookmarked) async {
@@ -83,6 +84,49 @@ class PDFPreferencesService {
     } catch (e) {
       return null;
     }
+  }
+
+  // Tools History
+  static Future<void> addToolsHistory(String operation, String filePath, {String? resultPath}) async {
+    final prefs = await SharedPreferences.getInstance();
+    final history = await getToolsHistory();
+    
+    final historyItem = {
+      'operation': operation,
+      'filePath': filePath,
+      'resultPath': resultPath,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    
+    history.insert(0, historyItem);
+    
+    // Keep only last 50 history items
+    if (history.length > 50) {
+      history.removeRange(50, history.length);
+    }
+    
+    await prefs.setString(_toolsHistoryKey, jsonEncode(history));
+  }
+
+  static Future<List<Map<String, dynamic>>> getToolsHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    final historyJson = prefs.getString(_toolsHistoryKey);
+    
+    if (historyJson == null) {
+      return [];
+    }
+    
+    try {
+      final decoded = jsonDecode(historyJson) as List<dynamic>;
+      return decoded.map((item) => item as Map<String, dynamic>).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
+  static Future<void> clearToolsHistory() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_toolsHistoryKey);
   }
 }
 

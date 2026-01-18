@@ -6,6 +6,7 @@ import 'dart:io';
 import '../painters/tool_icons_painter.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_service.dart';
+import '../services/pdf_preferences_service.dart';
 import 'pdf_viewer_screen.dart';
 
 class ToolsScreen extends StatefulWidget {
@@ -302,6 +303,12 @@ class _ToolsScreenState extends State<ToolsScreen> {
     try {
       final splitFiles = await PDFToolsService.splitPDF(filePath);
       if (splitFiles.isNotEmpty) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'split',
+          filePath,
+          resultPath: splitFiles.first,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -365,6 +372,12 @@ class _ToolsScreenState extends State<ToolsScreen> {
     try {
       final mergedPath = await PDFToolsService.mergePDFs(pdfPaths);
       if (mergedPath != null) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'merge',
+          pdfPaths.first,
+          resultPath: mergedPath,
+        );
         if (mounted) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -420,6 +433,12 @@ class _ToolsScreenState extends State<ToolsScreen> {
     try {
       final compressedPath = await PDFToolsService.compressPDF(filePath);
       if (compressedPath != null) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'compress',
+          filePath,
+          resultPath: compressedPath,
+        );
         if (mounted) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -491,6 +510,12 @@ class _ToolsScreenState extends State<ToolsScreen> {
     try {
       final zipPath = await PDFToolsService.createZIPFile(pdfPaths);
       if (zipPath != null) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'zip',
+          pdfPaths.first,
+          resultPath: zipPath,
+        );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

@@ -4,6 +4,8 @@ import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 import 'dart:io';
 import 'dart:async';
 import '../services/pdf_service.dart';
@@ -47,6 +49,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   double _strokeWidth = 3.0;
   final GlobalKey<PDFAnnotationOverlayState> _annotationOverlayKey = GlobalKey<PDFAnnotationOverlayState>();
   bool _canUndo = false;
+  bool _canRedo = false;
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -402,6 +405,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 _canUndo = canUndo;
               });
             },
+            onRedoStateChanged: (canRedo) {
+              setState(() {
+                _canRedo = canRedo;
+              });
+            },
             child: NotificationListener<ScrollNotification>(
               onNotification: (notification) {
                 // Detect when user scrolls manually and update preview bar
@@ -526,6 +534,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Widget _buildEditingToolbar() {
     return Container(
       height: 70,
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -539,6 +548,28 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
+          // Undo button
+          _buildToolButton(
+            icon: Icons.undo,
+            label: 'Undo',
+            isSelected: false,
+            onTap: _canUndo
+                ? () {
+                  _annotationOverlayKey.currentState?.undo();
+                }
+                : null,
+          ),
+          // Redo button
+          _buildToolButton(
+            icon: Icons.redo,
+            label: 'Redo',
+            isSelected: false,
+            onTap: _canRedo
+                ? () {
+                  _annotationOverlayKey.currentState?.redo();
+                }
+                : null,
+          ),
           // Copy text button
           _buildToolButton(
             icon: Icons.content_copy,
@@ -547,20 +578,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             onTap: () {
               _copySelectedText();
             },
-          ),
-          // Underline tool
-          _buildToolButton(
-            icon: Icons.format_underline,
-            label: 'Underline',
-            isSelected: _selectedTool == 'underline',
-            onTap: () => setState(() => _selectedTool = 'underline'),
-          ),
-          // Text tool
-          _buildToolButton(
-            icon: Icons.text_fields,
-            label: 'Text',
-            isSelected: _selectedTool == 'text',
-            onTap: () => _showTextInputDialog(),
           ),
           // Pen tool
           _buildToolButton(
@@ -575,6 +592,27 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             label: 'Highlight',
             isSelected: _selectedTool == 'highlight',
             onTap: () => setState(() => _selectedTool = 'highlight'),
+          ),
+          // Underline tool
+          _buildToolButton(
+            icon: Icons.format_underline,
+            label: 'Underline',
+            isSelected: _selectedTool == 'underline',
+            onTap: () => setState(() => _selectedTool = 'underline'),
+          ),
+          // Eraser tool
+          _buildToolButton(
+            icon: Icons.cleaning_services,
+            label: 'Eraser',
+            isSelected: _selectedTool == 'eraser',
+            onTap: () => setState(() => _selectedTool = 'eraser'),
+          ),
+          // Text tool
+          _buildToolButton(
+            icon: Icons.text_fields,
+            label: 'Text',
+            isSelected: _selectedTool == 'text',
+            onTap: () => _showTextInputDialog(),
           ),
           // Done button
           _buildToolButton(
@@ -777,6 +815,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             icon: Icons.print,
             title: 'Print',
             onTap: _printPDF,
+          ),
+          _buildOptionTile(
+            icon: Icons.save,
+            title: 'Save to device',
+            onTap: _saveToDevice,
           ),
           _buildOptionTile(
             icon: Icons.share,
@@ -1045,6 +1088,65 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
 
+  Future<void> _saveToDevice() async {
+    try {
+      final file = File(widget.filePath);
+      if (!await file.exists()) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('PDF file not found'),
+          ),
+        );
+        return;
+      }
+
+      // Get downloads directory (Android) or documents directory
+      Directory? targetDirectory;
+      if (Platform.isAndroid) {
+        // Try to get external storage downloads directory
+        try {
+          targetDirectory = Directory('/storage/emulated/0/Download');
+          if (!await targetDirectory.exists()) {
+            targetDirectory = await getExternalStorageDirectory();
+          }
+        } catch (e) {
+          targetDirectory = await getApplicationDocumentsDirectory();
+        }
+      } else {
+        targetDirectory = await getApplicationDocumentsDirectory();
+      }
+
+      if (targetDirectory == null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not access device storage'),
+          ),
+        );
+        return;
+      }
+
+      // Copy file to downloads/document directory
+      final fileName = path.basename(widget.filePath);
+      final targetPath = path.join(targetDirectory.path, fileName);
+      final targetFile = File(targetPath);
+      
+      await file.copy(targetPath);
+      
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('PDF saved to: ${targetDirectory.path}'),
+          duration: const Duration(seconds: 3),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error saving PDF: $e'),
+        ),
+      );
+    }
+  }
+
   Future<void> _sharePDF() async {
     try {
       final file = File(widget.filePath);
@@ -1113,36 +1215,63 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Future<void> _copySelectedText() async {
     try {
-      // Syncfusion PDF viewer handles text selection natively
-      // Users can select text by long-pressing and dragging
-      // Once text is selected, they can copy it using the system's copy option
-      // This button provides instructions on how to copy text
+      // Try to get selected text from PDF viewer
+      // Note: Syncfusion PDF viewer's text selection is handled natively
+      // We'll show instructions and also try to programmatically copy if possible
       
-      showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Copy Text'),
-          content: const Text(
-            'To copy text from the PDF:\n\n'
-            '1. Long press on the text you want to copy\n'
-            '2. Drag to select the desired text\n'
-            '3. Use the system copy option from the context menu\n\n'
-            'Text selection is enabled in the PDF viewer.',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('OK'),
+      // Check if there's a way to get selected text from the controller
+      String? selectedText;
+      try {
+        // Try to access selected text if available
+        // This may vary based on Syncfusion version
+        selectedText = _pdfViewerController.selectedText;
+      } catch (e) {
+        // If not available, show instructions
+      }
+      
+      if (selectedText != null && selectedText.isNotEmpty) {
+        // Copy the selected text to clipboard
+        await Clipboard.setData(ClipboardData(text: selectedText));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text copied to clipboard'),
+              duration: Duration(seconds: 2),
             ),
-          ],
-        ),
-      );
+          );
+        }
+      } else {
+        // Show instructions if no text is selected
+        if (mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Copy Text'),
+              content: const Text(
+                'To copy text from the PDF:\n\n'
+                '1. Long press on the text you want to copy\n'
+                '2. Drag to select the desired text\n'
+                '3. Tap the Copy button again to copy selected text\n\n'
+                'Text selection is enabled in the PDF viewer.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK'),
+                ),
+              ],
+            ),
+          );
+        }
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error: $e'),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error copying text: $e'),
+          ),
+        );
+      }
     }
   }
 

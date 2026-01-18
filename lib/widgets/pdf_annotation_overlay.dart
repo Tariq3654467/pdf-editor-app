@@ -25,6 +25,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final String toolType; // 'pen', 'highlight', 'underline'
   final VoidCallback? onClear;
   final Function(bool)? onUndoStateChanged;
+  final Function(bool)? onRedoStateChanged;
 
   const PDFAnnotationOverlay({
     super.key,
@@ -36,6 +37,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
     this.toolType = 'pen',
     this.onClear,
     this.onUndoStateChanged,
+    this.onRedoStateChanged,
   });
 
   @override
@@ -45,6 +47,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
 class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   List<List<AnnotationPoint>> _paths = [];
   List<AnnotationPoint> _currentPath = [];
+  List<List<AnnotationPoint>> _redoStack = []; // For redo functionality
 
 
   void _onPanStart(DragStartDetails details) {
@@ -97,7 +100,9 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
       setState(() {
         _paths.add(List.from(_currentPath));
         _currentPath = [];
+        _redoStack.clear(); // Clear redo stack when new action is performed
         widget.onUndoStateChanged?.call(true);
+        widget.onRedoStateChanged?.call(false);
       });
     }
   }
@@ -106,20 +111,37 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     setState(() {
       _paths.clear();
       _currentPath.clear();
+      _redoStack.clear();
     });
     widget.onClear?.call();
+    widget.onUndoStateChanged?.call(false);
+    widget.onRedoStateChanged?.call(false);
   }
 
   void undo() {
     if (_paths.isNotEmpty) {
       setState(() {
-        _paths.removeLast();
+        final removedPath = _paths.removeLast();
+        _redoStack.add(removedPath);
         widget.onUndoStateChanged?.call(_paths.isNotEmpty);
+        widget.onRedoStateChanged?.call(_redoStack.isNotEmpty);
+      });
+    }
+  }
+
+  void redo() {
+    if (_redoStack.isNotEmpty) {
+      setState(() {
+        final restoredPath = _redoStack.removeLast();
+        _paths.add(restoredPath);
+        widget.onUndoStateChanged?.call(true);
+        widget.onRedoStateChanged?.call(_redoStack.isNotEmpty);
       });
     }
   }
 
   bool get canUndo => _paths.isNotEmpty;
+  bool get canRedo => _redoStack.isNotEmpty;
 
   @override
   Widget build(BuildContext context) {

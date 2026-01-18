@@ -313,11 +313,20 @@ class _MyHomePageState extends State<MyHomePage> {
   final ImagePicker _imagePicker = ImagePicker();
   List<PDFFile> pdfFiles = [];
   bool _isLoading = true;
+  List<Map<String, dynamic>> _toolsHistory = [];
 
   @override
   void initState() {
     super.initState();
     _loadPDFs();
+    _loadToolsHistory();
+  }
+
+  Future<void> _loadToolsHistory() async {
+    final history = await PDFPreferencesService.getToolsHistory();
+    setState(() {
+      _toolsHistory = history;
+    });
   }
 
   Future<void> _loadPDFs() async {
@@ -850,16 +859,145 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
     
-    return ListView.builder(
+    return ListView(
       padding: const EdgeInsets.symmetric(
         horizontal: 16,
         vertical: 8,
       ),
-      itemCount: filteredPDFs.length,
-      itemBuilder: (context, index) {
-        return _buildPDFTile(filteredPDFs[index]);
-      },
+      children: [
+        // Tools History Section (only on "My file" tab)
+        if (_selectedTabIndex == 0 && _toolsHistory.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Colors.grey[50],
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text(
+                      'Recent Tools Activity',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF263238),
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        await PDFPreferencesService.clearToolsHistory();
+                        await _loadToolsHistory();
+                      },
+                      child: const Text(
+                        'Clear',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
+              ],
+            ),
+          ),
+        // PDF List
+        ...filteredPDFs.map((pdf) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: _buildPDFTile(pdf),
+        )),
+      ],
     );
+  }
+
+  Widget _buildHistoryItem(Map<String, dynamic> item) {
+    final operation = item['operation'] as String? ?? 'Unknown';
+    final timestamp = item['timestamp'] as String?;
+    DateTime? dateTime;
+    if (timestamp != null) {
+      try {
+        dateTime = DateTime.parse(timestamp);
+      } catch (e) {
+        dateTime = null;
+      }
+    }
+    
+    String operationName = operation;
+    IconData operationIcon = Icons.build;
+    
+    switch (operation.toLowerCase()) {
+      case 'merge':
+        operationName = 'Merged PDFs';
+        operationIcon = Icons.merge;
+        break;
+      case 'split':
+        operationName = 'Split PDF';
+        operationIcon = Icons.content_cut;
+        break;
+      case 'compress':
+        operationName = 'Compressed PDF';
+        operationIcon = Icons.compress;
+        break;
+      case 'zip':
+        operationName = 'Created ZIP';
+        operationIcon = Icons.archive;
+        break;
+      case 'scan':
+        operationName = 'Scanned to PDF';
+        operationIcon = Icons.document_scanner;
+        break;
+      default:
+        operationName = operation;
+    }
+    
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(operationIcon, size: 16, color: const Color(0xFF9E9E9E)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              operationName,
+              style: const TextStyle(
+                fontSize: 12,
+                color: Color(0xFF263238),
+              ),
+            ),
+          ),
+          if (dateTime != null)
+            Text(
+              _formatHistoryTime(dateTime),
+              style: const TextStyle(
+                fontSize: 11,
+                color: Color(0xFF9E9E9E),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  String _formatHistoryTime(DateTime dateTime) {
+    final now = DateTime.now();
+    final difference = now.difference(dateTime);
+    
+    if (difference.inMinutes < 1) {
+      return 'Just now';
+    } else if (difference.inMinutes < 60) {
+      return '${difference.inMinutes}m ago';
+    } else if (difference.inHours < 24) {
+      return '${difference.inHours}h ago';
+    } else if (difference.inDays < 7) {
+      return '${difference.inDays}d ago';
+    } else {
+      return '${dateTime.day}/${dateTime.month}/${dateTime.year}';
+    }
   }
 
   Widget _buildPDFTile(PDFFile pdf) {

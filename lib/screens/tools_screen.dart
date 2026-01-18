@@ -10,7 +10,9 @@ import '../services/pdf_preferences_service.dart';
 import 'pdf_viewer_screen.dart';
 
 class ToolsScreen extends StatefulWidget {
-  const ToolsScreen({super.key});
+  final VoidCallback? onOperationComplete;
+  
+  const ToolsScreen({super.key, this.onOperationComplete});
 
   @override
   State<ToolsScreen> createState() => _ToolsScreenState();
@@ -309,6 +311,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
           filePath,
           resultPath: splitFiles.first,
         );
+        widget.onOperationComplete?.call();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -378,6 +381,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
           pdfPaths.first,
           resultPath: mergedPath,
         );
+        widget.onOperationComplete?.call();
         if (mounted) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -439,6 +443,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
           filePath,
           resultPath: compressedPath,
         );
+        widget.onOperationComplete?.call();
         if (mounted) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -516,6 +521,7 @@ class _ToolsScreenState extends State<ToolsScreen> {
           pdfPaths.first,
           resultPath: zipPath,
         );
+        widget.onOperationComplete?.call();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(

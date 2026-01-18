@@ -340,6 +340,9 @@ class _MyHomePageState extends State<MyHomePage> {
       pdfFiles = loadedPDFs;
       _isLoading = false;
     });
+    
+    // Also reload history when PDFs are loaded
+    await _loadToolsHistory();
   }
 
   List<PDFFile> _getFilteredPDFs() {

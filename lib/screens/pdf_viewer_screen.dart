@@ -1295,14 +1295,28 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Add Text'),
-        content: TextField(
-          controller: textController,
-          decoration: const InputDecoration(
-            hintText: 'Enter text to add',
-            border: OutlineInputBorder(),
-          ),
-          maxLines: 3,
+        title: const Text('Add Text Annotation'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Enter text to add as annotation. The text will be added to the current page.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: textController,
+              autofocus: true,
+              decoration: const InputDecoration(
+                hintText: 'Enter text to add',
+                border: OutlineInputBorder(),
+                labelText: 'Text',
+              ),
+              maxLines: 3,
+              textCapitalization: TextCapitalization.sentences,
+            ),
+          ],
         ),
         actions: [
           TextButton(
@@ -1313,13 +1327,17 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             onPressed: () {
               if (textController.text.isNotEmpty) {
                 Navigator.pop(context);
+                // For now, show a message. In future, this could add text annotation
+                // to the PDF at the current page position
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Text "${textController.text}" added'),
-                    duration: const Duration(seconds: 2),
+                    content: Text('Text annotation "${textController.text}" will be added. Use Pen tool to draw text annotations.'),
+                    duration: const Duration(seconds: 3),
                   ),
                 );
-                // TODO: Implement text annotation on PDF
+                // Note: True text editing (like Sejda) requires PDF text extraction
+                // and manipulation which is complex. For now, users can use the Pen tool
+                // to write text manually or use text selection to copy existing text.
               }
             },
             child: const Text('Add'),

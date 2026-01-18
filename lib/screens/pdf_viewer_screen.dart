@@ -5,6 +5,7 @@ import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as path;
 import 'dart:io';
 import 'dart:async';
@@ -1107,58 +1108,131 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     try {
       final file = File(widget.filePath);
       if (!await file.exists()) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('PDF file not found'),
-          ),
-        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF file not found'),
+            ),
+          );
+        }
         return;
       }
 
-      // Get downloads directory (Android) or documents directory
+      // Show loading indicator
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+
+      // Try to save to app's external storage directory first (no permissions needed)
+      // Then offer to share so user can save to Downloads if they want
+      final fileName = path.basename(widget.filePath);
       Directory? targetDirectory;
+      
       if (Platform.isAndroid) {
-        // Try to get external storage downloads directory
+        // Use external storage directory (app-specific, no permissions needed)
         try {
-          targetDirectory = Directory('/storage/emulated/0/Download');
-          if (!await targetDirectory.exists()) {
-            targetDirectory = await getExternalStorageDirectory();
+          targetDirectory = await getExternalStorageDirectory();
+          if (targetDirectory != null) {
+            // Create a "Saved PDFs" subdirectory
+            final savedPdfsDir = Directory('${targetDirectory.path}/Saved PDFs');
+            if (!await savedPdfsDir.exists()) {
+              await savedPdfsDir.create(recursive: true);
+            }
+            targetDirectory = savedPdfsDir;
           }
         } catch (e) {
-          targetDirectory = await getApplicationDocumentsDirectory();
+          print('Error getting external storage: $e');
         }
-      } else {
-        targetDirectory = await getApplicationDocumentsDirectory();
+      }
+      
+      // Fallback to app documents directory
+      if (targetDirectory == null) {
+        final appDocDir = await getApplicationDocumentsDirectory();
+        final savedPdfsDir = Directory('${appDocDir.path}/Saved PDFs');
+        if (!await savedPdfsDir.exists()) {
+          await savedPdfsDir.create(recursive: true);
+        }
+        targetDirectory = savedPdfsDir;
       }
 
+      // Ensure we have a valid directory
       if (targetDirectory == null) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Could not access device storage'),
-          ),
-        );
+        if (mounted) {
+          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Could not access device storage'),
+            ),
+          );
+        }
         return;
       }
 
-      // Copy file to downloads/document directory
-      final fileName = path.basename(widget.filePath);
-      final targetPath = path.join(targetDirectory.path, fileName);
+      // Copy file to target directory
+      final targetPath = path.join(targetDirectory!.path, fileName);
       final targetFile = File(targetPath);
-      
       await file.copy(targetPath);
       
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('PDF saved to: ${targetDirectory.path}'),
-          duration: const Duration(seconds: 3),
-        ),
-      );
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+      }
+      
+      // Show success message and offer to share
+      if (mounted) {
+        final shouldShare = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('PDF Saved'),
+            content: Text('PDF saved to:\n${targetDirectory!.path}\n\nWould you like to share it to save to Downloads?'),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('No, thanks'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Share'),
+              ),
+            ],
+          ),
+        );
+        
+        if (shouldShare == true) {
+          // Share the file so user can save to Downloads
+          await Share.shareXFiles(
+            [XFile(targetPath, name: fileName)],
+            text: 'Save PDF: $fileName',
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('PDF saved to: ${targetDirectory!.path}'),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Error saving PDF: $e'),
-        ),
-      );
+      // Close loading dialog if still open
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error saving PDF: $e'),
+            duration: const Duration(seconds: 3),
+          ),
+        );
+      }
     }
   }
 
@@ -1230,60 +1304,37 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Future<void> _copySelectedText() async {
     try {
-      // Try to get selected text from PDF viewer
-      // Note: Syncfusion PDF viewer's text selection is handled natively
-      // We'll show instructions and also try to programmatically copy if possible
+      // Syncfusion PDF viewer handles text selection natively
+      // Users can select text by long-pressing and dragging
+      // Once text is selected, they can copy it using the system's copy option
+      // This button provides instructions on how to copy text
       
-      // Check if there's a way to get selected text from the controller
-      String? selectedText;
-      try {
-        // Try to access selected text if available
-        // This may vary based on Syncfusion version
-        selectedText = _pdfViewerController.selectedText;
-      } catch (e) {
-        // If not available, show instructions
-      }
-      
-      if (selectedText != null && selectedText.isNotEmpty) {
-        // Copy the selected text to clipboard
-        await Clipboard.setData(ClipboardData(text: selectedText));
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Text copied to clipboard'),
-              duration: Duration(seconds: 2),
+      if (mounted) {
+        showDialog(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Copy Text'),
+            content: const Text(
+              'To copy text from the PDF:\n\n'
+              '1. Long press on the text you want to copy\n'
+              '2. Drag to select the desired text\n'
+              '3. Use the system copy option from the context menu that appears\n\n'
+              'Text selection is enabled in the PDF viewer. The selected text will be automatically available for copying through the system menu.',
             ),
-          );
-        }
-      } else {
-        // Show instructions if no text is selected
-        if (mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Copy Text'),
-              content: const Text(
-                'To copy text from the PDF:\n\n'
-                '1. Long press on the text you want to copy\n'
-                '2. Drag to select the desired text\n'
-                '3. Tap the Copy button again to copy selected text\n\n'
-                'Text selection is enabled in the PDF viewer.',
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('OK'),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK'),
-                ),
-              ],
-            ),
-          );
-        }
+            ],
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error copying text: $e'),
+            content: Text('Error: $e'),
           ),
         );
       }

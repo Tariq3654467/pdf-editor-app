@@ -6,6 +6,8 @@ class AnnotationPoint {
   final double strokeWidth;
   final bool isEraser;
   final String toolType; // 'pen', 'highlight', 'underline'
+  final int pageNumber; // Page number this annotation belongs to
+  final Offset normalizedPoint; // Normalized coordinates (0-1 range) relative to page
 
   AnnotationPoint({
     required this.point,
@@ -13,6 +15,8 @@ class AnnotationPoint {
     required this.strokeWidth,
     this.isEraser = false,
     this.toolType = 'pen',
+    required this.pageNumber,
+    required this.normalizedPoint,
   });
 }
 
@@ -23,6 +27,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final bool isDrawing;
   final bool isEraser;
   final String toolType; // 'pen', 'highlight', 'underline'
+  final int currentPage; // Current page number
   final VoidCallback? onClear;
   final Function(bool)? onUndoStateChanged;
   final Function(bool)? onRedoStateChanged;
@@ -35,6 +40,7 @@ class PDFAnnotationOverlay extends StatefulWidget {
     required this.isDrawing,
     required this.isEraser,
     this.toolType = 'pen',
+    required this.currentPage,
     this.onClear,
     this.onUndoStateChanged,
     this.onRedoStateChanged,
@@ -52,6 +58,18 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 
   void _onPanStart(DragStartDetails details) {
     if (widget.isDrawing) {
+      // Get the size of the overlay to normalize coordinates
+      final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+      final size = renderBox?.size ?? Size.zero;
+      
+      // Normalize coordinates (0-1 range) relative to overlay size
+      final normalizedPoint = size.width > 0 && size.height > 0
+          ? Offset(
+              details.localPosition.dx / size.width,
+              details.localPosition.dy / size.height,
+            )
+          : Offset.zero;
+      
       setState(() {
         _currentPath = [
           AnnotationPoint(
@@ -60,6 +78,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             strokeWidth: widget.strokeWidth,
             isEraser: widget.isEraser,
             toolType: widget.toolType,
+            pageNumber: widget.currentPage,
+            normalizedPoint: normalizedPoint,
           ),
         ];
       });
@@ -68,16 +88,31 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 
   void _onPanUpdate(DragUpdateDetails details) {
     if (widget.isDrawing && _currentPath.isNotEmpty) {
+      // Get the size of the overlay to normalize coordinates
+      final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+      final size = renderBox?.size ?? Size.zero;
+      
+      // Normalize coordinates (0-1 range) relative to overlay size
+      final normalizedPoint = size.width > 0 && size.height > 0
+          ? Offset(
+              details.localPosition.dx / size.width,
+              details.localPosition.dy / size.height,
+            )
+          : Offset.zero;
+      
       setState(() {
-        // For underline, only update Y position to keep horizontal line
+        // For underline, only update X position to keep horizontal line
         if (widget.toolType == 'underline') {
           final startY = _currentPath.first.point.dy;
+          final startNormalizedY = _currentPath.first.normalizedPoint.dy;
           _currentPath.add(
             AnnotationPoint(
               point: Offset(details.localPosition.dx, startY),
               color: widget.drawingColor,
               strokeWidth: widget.strokeWidth,
               toolType: widget.toolType,
+              pageNumber: widget.currentPage,
+              normalizedPoint: Offset(normalizedPoint.dx, startNormalizedY),
             ),
           );
         } else {
@@ -88,6 +123,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
               strokeWidth: widget.strokeWidth,
               isEraser: widget.isEraser,
               toolType: widget.toolType,
+              pageNumber: widget.currentPage,
+              normalizedPoint: normalizedPoint,
             ),
           );
         }
@@ -146,12 +183,19 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   @override
   Widget build(BuildContext context) {
     // Build the annotation painter that displays all annotations
-    final annotationPainter = CustomPaint(
-      painter: AnnotationPainter(
-        paths: _paths,
-        currentPath: _currentPath,
-      ),
-      child: Container(),
+    // Use LayoutBuilder to get the current size for coordinate transformation
+    final annotationPainter = LayoutBuilder(
+      builder: (context, constraints) {
+        return CustomPaint(
+          painter: AnnotationPainter(
+            paths: _paths,
+            currentPath: _currentPath,
+            overlaySize: constraints.biggest,
+            currentPage: widget.currentPage,
+          ),
+          child: Container(),
+        );
+      },
     );
 
     // When drawing, wrap with GestureDetector to capture drawing gestures

@@ -12,6 +12,7 @@ import 'dart:async';
 import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../services/pdf_text_editor_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
 
@@ -52,6 +53,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   final GlobalKey<PDFAnnotationOverlayState> _annotationOverlayKey = GlobalKey<PDFAnnotationOverlayState>();
   bool _canUndo = false;
   bool _canRedo = false;
+  
+  // Text editing state (Sejda-style)
+  Offset? _textEditPosition;
+  String? _editingText;
+  bool _isTextEditMode = false;
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -453,16 +459,21 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 }
                 return false;
               },
-              child: SfPdfViewer.file(
-                File(widget.filePath),
-                key: ValueKey('pdf_viewer_$_viewMode'), // Force rebuild when view mode changes
-                controller: _pdfViewerController,
-                onDocumentLoaded: _onDocumentLoaded,
-                onPageChanged: _onPageChanged,
-                scrollDirection: _getScrollDirection(),
-                pageLayoutMode: _getPageLayoutMode(),
-                enableDoubleTapZooming: true,
-                enableTextSelection: true,
+              child: GestureDetector(
+                onTapDown: _isTextEditMode && _selectedTool == 'text'
+                    ? (details) => _handleTextEditTap(details.localPosition)
+                    : null,
+                child: SfPdfViewer.file(
+                  File(widget.filePath),
+                  key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
+                  controller: _pdfViewerController,
+                  onDocumentLoaded: _onDocumentLoaded,
+                  onPageChanged: _onPageChanged,
+                  scrollDirection: _getScrollDirection(),
+                  pageLayoutMode: _getPageLayoutMode(),
+                  enableDoubleTapZooming: true,
+                  enableTextSelection: !(_isTextEditMode && _selectedTool == 'text'), // Disable text selection when in text edit mode
+                ),
               ),
             ),
           ),
@@ -625,12 +636,23 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'eraser',
             onTap: () => setState(() => _selectedTool = 'eraser'),
           ),
-          // Text tool
+          // Text tool (Sejda-style: click to edit existing text or add new)
           _buildToolButton(
             icon: Icons.text_fields,
             label: 'Text',
             isSelected: _selectedTool == 'text',
-            onTap: () => _showTextInputDialog(),
+            onTap: () {
+              setState(() {
+                _selectedTool = 'text';
+                _isTextEditMode = true;
+              });
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Tap on text to edit it, or tap on empty space to add new text'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
           ),
           // Done button
           _buildToolButton(
@@ -1354,6 +1376,150 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         );
       }
     }
+  }
+
+  Future<void> _handleTextEditTap(Offset position) async {
+    if (!_isTextEditMode || _selectedTool != 'text') return;
+    
+    try {
+      // Adjust position for scroll offset
+      final adjustedPosition = Offset(
+        position.dx,
+        position.dy + _pdfScrollOffset,
+      );
+      
+      // Try to find existing text at this position
+      final textElement = await PDFTextEditorService.findTextAtPoint(
+        widget.filePath,
+        _currentPage - 1, // Convert to 0-based index
+        adjustedPosition,
+      );
+      
+      if (textElement != null) {
+        // Edit existing text
+        _showTextEditDialog(
+          initialText: textElement.text,
+          position: adjustedPosition,
+          isEditing: true,
+        );
+      } else {
+        // Add new text
+        _showTextEditDialog(
+          initialText: '',
+          position: adjustedPosition,
+          isEditing: false,
+        );
+      }
+    } catch (e) {
+      print('Error handling text edit tap: $e');
+      // Fallback to simple text input
+      _showTextEditDialog(
+        initialText: '',
+        position: position,
+        isEditing: false,
+      );
+    }
+  }
+
+  void _showTextEditDialog({
+    required String initialText,
+    required Offset position,
+    required bool isEditing,
+  }) {
+    final textController = TextEditingController(text: initialText);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(isEditing ? 'Edit Text' : 'Add Text'),
+        content: TextField(
+          controller: textController,
+          autofocus: true,
+          maxLines: null,
+          decoration: const InputDecoration(
+            hintText: 'Enter text',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                _isTextEditMode = false;
+              });
+            },
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () async {
+              final newText = textController.text;
+              if (newText.isNotEmpty || isEditing) {
+                Navigator.pop(context);
+                
+                // Show loading
+                if (mounted) {
+                  showDialog(
+                    context: context,
+                    barrierDismissible: false,
+                    builder: (context) => const Center(
+                      child: CircularProgressIndicator(),
+                    ),
+                  );
+                }
+                
+                // Edit or add text in PDF
+                final success = isEditing
+                    ? await PDFTextEditorService.editTextInPDF(
+                        widget.filePath,
+                        _currentPage - 1,
+                        initialText,
+                        newText,
+                        position,
+                      )
+                    : await PDFTextEditorService.addTextToPDF(
+                        widget.filePath,
+                        _currentPage - 1,
+                        newText,
+                        position,
+                        color: _selectedColor,
+                      );
+                
+                // Close loading
+                if (mounted) {
+                  Navigator.pop(context);
+                }
+                
+                if (success && mounted) {
+                  // Reload PDF viewer by updating the key
+                  setState(() {
+                    // Force rebuild of PDF viewer
+                  });
+                  
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(isEditing ? 'Text updated successfully' : 'Text added successfully'),
+                      duration: const Duration(seconds: 2),
+                    ),
+                  );
+                  
+                  setState(() {
+                    _isTextEditMode = false;
+                  });
+                } else if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Failed to update text. Please try again.'),
+                    ),
+                  );
+                }
+              }
+            },
+            child: Text(isEditing ? 'Update' : 'Add'),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showTextInputDialog() {

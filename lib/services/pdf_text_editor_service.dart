@@ -79,6 +79,12 @@ class PDFTextEditorService {
 
       final page = document.pages[pageIndex];
       final graphics = page.graphics;
+      final pageSize = page.size;
+      
+      // Convert screen coordinates (top-left origin) to PDF coordinates (bottom-left origin)
+      // PDF Y coordinate = page height - screen Y coordinate
+      final pdfX = position.dx.clamp(0.0, pageSize.width);
+      final pdfY = (pageSize.height - position.dy).clamp(0.0, pageSize.height);
       
       // Add text
       final font = sf.PdfStandardFont(
@@ -97,15 +103,18 @@ class PDFTextEditorService {
       stringFormat.alignment = sf.PdfTextAlignment.left;
       stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
       
+      // Calculate available width for text wrapping
+      final availableWidth = pageSize.width - pdfX;
+      
       graphics.drawString(
         text,
         font,
         brush: textBrush,
         format: stringFormat,
         bounds: Rect.fromLTWH(
-          position.dx,
-          position.dy,
-          page.size.width - position.dx, // Use available width
+          pdfX,
+          pdfY,
+          availableWidth > 0 ? availableWidth : pageSize.width, // Use available width
           100, // Allow multi-line text
         ),
       );

@@ -44,6 +44,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isScrolling = false;
   bool _showPagePreview = true; // Control visibility of page preview bar
   double _pdfScrollOffset = 0.0; // Track PDF vertical scroll offset for annotations
+  int _pdfReloadKey = 0; // Key to force PDF viewer reload after modifications
   
   // Annotation/Editing state
   bool _isEditingMode = false;
@@ -465,7 +466,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                       behavior: HitTestBehavior.translucent, // Allow scroll gestures to pass through
                       child: SfPdfViewer.file(
                         File(widget.filePath),
-                        key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
+                        key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode$_pdfReloadKey'), // Force rebuild when file changes
                         controller: _pdfViewerController,
                         onDocumentLoaded: _onDocumentLoaded,
                         onPageChanged: _onPageChanged,
@@ -477,7 +478,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                     )
                   : SfPdfViewer.file(
                       File(widget.filePath),
-                      key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
+                      key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode$_pdfReloadKey'), // Force rebuild when file changes
                       controller: _pdfViewerController,
                       onDocumentLoaded: _onDocumentLoaded,
                       onPageChanged: _onPageChanged,
@@ -1393,7 +1394,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     if (!_isTextEditMode || _selectedTool != 'text') return;
     
     try {
-      // Adjust position for scroll offset
+      // Get the PDF viewer's render box to convert local coordinates
+      final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
+      if (renderBox == null) {
+        print('Error: Could not find render box');
+        return;
+      }
+      
+      // Position is already in local coordinates relative to the PDF viewer
+      // We need to account for the current page's position in the scroll view
+      // For continuous scroll mode, we need to calculate which part of the page was tapped
       final adjustedPosition = Offset(
         position.dx,
         position.dy + _pdfScrollOffset,
@@ -1458,15 +1468,27 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               Navigator.pop(context);
               setState(() {
                 _isTextEditMode = false;
+                _selectedTool = 'none';
               });
             },
             child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () async {
-              final newText = textController.text;
-              if (newText.isNotEmpty || isEditing) {
+              final newText = textController.text.trim();
+              if (newText.isNotEmpty || (isEditing && newText.isEmpty)) {
                 Navigator.pop(context);
+                
+                // Validate: don't allow empty text when adding new
+                if (!isEditing && newText.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Please enter some text'),
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                  return;
+                }
                 
                 // Show loading
                 if (mounted) {
@@ -1479,51 +1501,91 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   );
                 }
                 
-                // Edit or add text in PDF
-                final success = isEditing
-                    ? await PDFTextEditorService.editTextInPDF(
-                        widget.filePath,
-                        _currentPage - 1,
-                        initialText,
-                        newText,
-                        position,
-                      )
-                    : await PDFTextEditorService.addTextToPDF(
-                        widget.filePath,
-                        _currentPage - 1,
-                        newText,
-                        position,
-                        color: _selectedColor,
-                      );
-                
-                // Close loading
-                if (mounted) {
-                  Navigator.pop(context);
-                }
-                
-                if (success && mounted) {
-                  // Reload PDF viewer by updating the key
-                  setState(() {
-                    // Force rebuild of PDF viewer
-                  });
+                try {
+                  // Edit or add text in PDF
+                  final success = isEditing
+                      ? await PDFTextEditorService.editTextInPDF(
+                          widget.filePath,
+                          _currentPage - 1,
+                          initialText,
+                          newText,
+                          position,
+                        )
+                      : await PDFTextEditorService.addTextToPDF(
+                          widget.filePath,
+                          _currentPage - 1,
+                          newText,
+                          position,
+                          color: _selectedColor,
+                        );
                   
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(isEditing ? 'Text updated successfully' : 'Text added successfully'),
-                      duration: const Duration(seconds: 2),
-                    ),
-                  );
+                  // Close loading
+                  if (mounted) {
+                    Navigator.pop(context);
+                  }
                   
-                  setState(() {
-                    _isTextEditMode = false;
-                  });
-                } else if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Failed to update text. Please try again.'),
-                    ),
-                  );
+                  if (success && mounted) {
+                    // Reload PDF viewer by incrementing the reload key
+                    // This forces the PDF viewer to reload the file
+                    setState(() {
+                      _isLoading = true;
+                      _pdfReloadKey++; // Increment key to force reload
+                    });
+                    
+                    // Wait a moment for the PDF to reload
+                    await Future.delayed(const Duration(milliseconds: 300));
+                    
+                    // Jump to current page after reload
+                    if (mounted) {
+                      try {
+                        _pdfViewerController.jumpToPage(_currentPage);
+                      } catch (e) {
+                        print('Error jumping to page after reload: $e');
+                      }
+                      setState(() {
+                        _isLoading = false;
+                      });
+                    }
+                    
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(isEditing ? 'Text updated successfully' : 'Text added successfully'),
+                        duration: const Duration(seconds: 2),
+                      ),
+                    );
+                    
+                    setState(() {
+                      _isTextEditMode = false;
+                      _selectedTool = 'none';
+                    });
+                  } else if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Failed to update text. Please try again.'),
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  }
+                } catch (e) {
+                  // Close loading if still open
+                  if (mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error: ${e.toString()}'),
+                        duration: const Duration(seconds: 3),
+                      ),
+                    );
+                  }
                 }
+              } else if (!isEditing) {
+                // Show error for empty text when adding
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Please enter some text'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
               }
             },
             child: Text(isEditing ? 'Update' : 'Add'),

@@ -459,22 +459,33 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 }
                 return false;
               },
-              child: GestureDetector(
-                onTapDown: _isTextEditMode && _selectedTool == 'text'
-                    ? (details) => _handleTextEditTap(details.localPosition)
-                    : null,
-                child: SfPdfViewer.file(
-                  File(widget.filePath),
-                  key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
-                  controller: _pdfViewerController,
-                  onDocumentLoaded: _onDocumentLoaded,
-                  onPageChanged: _onPageChanged,
-                  scrollDirection: _getScrollDirection(),
-                  pageLayoutMode: _getPageLayoutMode(),
-                  enableDoubleTapZooming: true,
-                  enableTextSelection: !(_isTextEditMode && _selectedTool == 'text'), // Disable text selection when in text edit mode
-                ),
-              ),
+              child: _isTextEditMode && _selectedTool == 'text'
+                  ? GestureDetector(
+                      onTapDown: (details) => _handleTextEditTap(details.localPosition),
+                      behavior: HitTestBehavior.translucent, // Allow scroll gestures to pass through
+                      child: SfPdfViewer.file(
+                        File(widget.filePath),
+                        key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
+                        controller: _pdfViewerController,
+                        onDocumentLoaded: _onDocumentLoaded,
+                        onPageChanged: _onPageChanged,
+                        scrollDirection: _getScrollDirection(),
+                        pageLayoutMode: _getPageLayoutMode(),
+                        enableDoubleTapZooming: true,
+                        enableTextSelection: false, // Disable text selection when in text edit mode
+                      ),
+                    )
+                  : SfPdfViewer.file(
+                      File(widget.filePath),
+                      key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode'), // Force rebuild when file changes
+                      controller: _pdfViewerController,
+                      onDocumentLoaded: _onDocumentLoaded,
+                      onPageChanged: _onPageChanged,
+                      scrollDirection: _getScrollDirection(),
+                      pageLayoutMode: _getPageLayoutMode(),
+                      enableDoubleTapZooming: true,
+                      enableTextSelection: true,
+                    ),
             ),
           ),
           // Page count indicator (briefly shown on page change)

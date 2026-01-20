@@ -1464,7 +1464,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required bool isEditing,
     TextAnnotation? existingAnnotation,
   }) {
-    final textController = TextEditingController(text: initialText);
+    final textController = TextEditingController(
+      text: existingAnnotation?.text ?? initialText,
+    );
     
     showDialog(
       context: context,

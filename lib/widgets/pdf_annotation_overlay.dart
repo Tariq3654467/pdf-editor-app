@@ -1,5 +1,26 @@
 import 'package:flutter/material.dart';
 
+// Text annotation for instant text overlay (Sejda-style)
+class TextAnnotation {
+  final String text;
+  final Offset position; // Normalized position (0-1 range)
+  final Color color;
+  final double fontSize;
+  final int pageNumber;
+  final double? documentY; // Absolute Y position in document
+  final String id; // Unique identifier for editing/deleting
+
+  TextAnnotation({
+    required this.text,
+    required this.position,
+    required this.color,
+    this.fontSize = 12.0,
+    required this.pageNumber,
+    this.documentY,
+    String? id,
+  }) : id = id ?? DateTime.now().millisecondsSinceEpoch.toString();
+}
+
 class AnnotationPoint {
   final Offset point;
   final Color color;
@@ -34,6 +55,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final VoidCallback? onClear;
   final Function(bool)? onUndoStateChanged;
   final Function(bool)? onRedoStateChanged;
+  final List<TextAnnotation>? textAnnotations; // Text overlays
+  final Function(TextAnnotation)? onTextTap; // Callback when text is tapped
 
   const PDFAnnotationOverlay({
     super.key,
@@ -48,6 +71,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
     this.onClear,
     this.onUndoStateChanged,
     this.onRedoStateChanged,
+    this.textAnnotations,
+    this.onTextTap,
   });
 
   @override
@@ -193,6 +218,40 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   bool get canUndo => _paths.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
 
+  Widget _buildTextOverlays(Size overlaySize) {
+    if (widget.textAnnotations == null || widget.textAnnotations!.isEmpty) {
+      return Container();
+    }
+
+    return Stack(
+      children: widget.textAnnotations!
+          .where((textAnnotation) => textAnnotation.pageNumber == widget.currentPage)
+          .map((textAnnotation) {
+        // Convert normalized position to screen coordinates
+        final screenX = textAnnotation.position.dx * overlaySize.width;
+        final screenY = textAnnotation.documentY != null
+            ? textAnnotation.documentY! - widget.scrollOffset
+            : textAnnotation.position.dy * overlaySize.height;
+
+        return Positioned(
+          left: screenX,
+          top: screenY,
+          child: GestureDetector(
+            onTap: () => widget.onTextTap?.call(textAnnotation),
+            child: Text(
+              textAnnotation.text,
+              style: TextStyle(
+                color: textAnnotation.color,
+                fontSize: textAnnotation.fontSize,
+                backgroundColor: Colors.transparent,
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Build the annotation painter that displays all annotations
@@ -206,8 +265,9 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             overlaySize: constraints.biggest,
             currentPage: widget.currentPage,
             scrollOffset: widget.scrollOffset,
+            textAnnotations: widget.textAnnotations ?? [],
           ),
-          child: Container(),
+          child: _buildTextOverlays(constraints.biggest),
         );
       },
     );
@@ -249,6 +309,7 @@ class AnnotationPainter extends CustomPainter {
   final Size overlaySize;
   final int currentPage;
   final double scrollOffset;
+  final List<TextAnnotation> textAnnotations;
 
   AnnotationPainter({
     required this.paths,
@@ -256,6 +317,7 @@ class AnnotationPainter extends CustomPainter {
     required this.overlaySize,
     required this.currentPage,
     required this.scrollOffset,
+    this.textAnnotations = const [],
   });
 
   // Convert document coordinates to screen coordinates

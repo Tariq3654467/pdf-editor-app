@@ -59,6 +59,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Offset? _textEditPosition;
   String? _editingText;
   bool _isTextEditMode = false;
+  List<TextAnnotation> _textAnnotations = []; // Instant text overlays (not saved to PDF yet)
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'

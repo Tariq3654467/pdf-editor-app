@@ -411,6 +411,13 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             toolType: _selectedTool,
             currentPage: _currentPage,
             scrollOffset: _pdfScrollOffset,
+            textAnnotations: _textAnnotations,
+            onTextTap: (textAnnotation) {
+              // Allow editing text by tapping on it
+              if (_isTextEditMode && _selectedTool == 'text') {
+                _editTextAnnotation(textAnnotation);
+              }
+            },
             onClear: () {},
             onUndoStateChanged: (canUndo) {
               setState(() {
@@ -1394,101 +1401,68 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Future<void> _handleTextEditTap(Offset position) async {
     if (!_isTextEditMode || _selectedTool != 'text') return;
     
-    try {
-      // Load PDF to get page dimensions
-      final document = await PDFTextEditorService.getPdfDocument(widget.filePath);
-      if (document == null) {
-        print('Error: Could not load PDF document');
-        return;
-      }
-      
-      final pageIndex = _currentPage - 1;
-      if (pageIndex < 0 || pageIndex >= document.pages.count) {
-        document.dispose();
-        print('Error: Invalid page index');
-        return;
-      }
-      
-      final page = document.pages[pageIndex];
-      final pageSize = page.size;
-      document.dispose();
-      
-      // Get screen dimensions
-      final screenSize = MediaQuery.of(context).size;
-      
-      // Calculate scale factor - PDF pages are scaled to fit screen width
-      final scale = screenSize.width / pageSize.width;
-      
-      // Convert screen coordinates to PDF coordinates
-      // X is straightforward - just divide by scale
-      final pdfX = (position.dx / scale).clamp(0.0, pageSize.width);
-      
-      // For Y: position.dy is from top of visible viewport
-      // In continuous scroll, we need to account for scroll position
-      // The scroll offset tells us how far we've scrolled in the document
-      // Calculate which part of the current page is visible
-      final scaledPageHeight = pageSize.height * scale;
-      
-      // Get scroll position within current page (modulo page height)
-      // This tells us how far into the current page we've scrolled
-      final scrollInCurrentPage = _pdfScrollOffset % scaledPageHeight;
-      
-      // The tap Y position relative to the top of the current page
-      // If we've scrolled down in the page, we need to add that offset
-      final pageRelativeY = position.dy + scrollInCurrentPage;
-      
-      // Clamp to page bounds
-      final clampedPageY = pageRelativeY.clamp(0.0, scaledPageHeight);
-      
-      // Convert to PDF coordinates (PDF uses bottom-left origin)
-      // So: pdfY = pageHeight - (screenY / scale)
-      final pdfY = (pageSize.height - (clampedPageY / scale)).clamp(0.0, pageSize.height);
-      
-      final pdfPosition = Offset(pdfX, pdfY);
-      
-      print('Tap: screen(${position.dx.toStringAsFixed(1)}, ${position.dy.toStringAsFixed(1)}), '
-          'scroll: ${_pdfScrollOffset.toStringAsFixed(1)}, '
-          'scrollInPage: ${scrollInCurrentPage.toStringAsFixed(1)}, '
-          'page: $pageIndex, '
-          'pdf(${pdfX.toStringAsFixed(1)}, ${pdfY.toStringAsFixed(1)})');
-      
-      // Try to find existing text at this position
-      final textElement = await PDFTextEditorService.findTextAtPoint(
-        widget.filePath,
-        pageIndex,
-        pdfPosition,
-      );
-      
-      if (textElement != null) {
-        // Edit existing text
-        _showTextEditDialog(
-          initialText: textElement.text,
-          position: pdfPosition,
-          isEditing: true,
+    // First check if user tapped on an existing text overlay
+    final screenSize = MediaQuery.of(context).size;
+    final tappedText = _textAnnotations.firstWhere(
+      (textAnnotation) {
+        if (textAnnotation.pageNumber != _currentPage) return false;
+        final screenX = textAnnotation.position.dx * screenSize.width;
+        final screenY = textAnnotation.documentY != null
+            ? textAnnotation.documentY! - _pdfScrollOffset
+            : textAnnotation.position.dy * screenSize.height;
+        
+        // Check if tap is within text bounds (approximate - text width based on length)
+        final textWidth = textAnnotation.text.length * textAnnotation.fontSize * 0.6;
+        final textHeight = textAnnotation.fontSize;
+        final textRect = Rect.fromLTWH(
+          screenX - 5,
+          screenY - 5,
+          textWidth + 10,
+          textHeight + 10,
         );
-      } else {
-        // Add new text
-        _showTextEditDialog(
-          initialText: '',
-          position: pdfPosition,
-          isEditing: false,
-        );
-      }
-    } catch (e) {
-      print('Error handling text edit tap: $e');
-      // Fallback to simple text input - use raw position
-      _showTextEditDialog(
-        initialText: '',
-        position: position,
-        isEditing: false,
-      );
+        return textRect.contains(position);
+      },
+      orElse: () => TextAnnotation(
+        text: '',
+        position: Offset.zero,
+        color: Colors.black,
+        pageNumber: -1,
+      ),
+    );
+    
+    if (tappedText.pageNumber == _currentPage && tappedText.text.isNotEmpty) {
+      // Edit existing text overlay
+      _editTextAnnotation(tappedText);
+      return;
     }
+    
+    // No existing text found - add new text at tap position
+    _showTextEditDialog(
+      initialText: '',
+      position: position,
+      isEditing: false,
+    );
+  }
+  
+  void _editTextAnnotation(TextAnnotation textAnnotation) {
+    _showTextEditDialog(
+      initialText: textAnnotation.id, // Use ID to identify which annotation to edit
+      position: Offset(
+        textAnnotation.position.dx * MediaQuery.of(context).size.width,
+        textAnnotation.documentY != null
+            ? textAnnotation.documentY! - _pdfScrollOffset
+            : textAnnotation.position.dy * MediaQuery.of(context).size.height,
+      ),
+      isEditing: true,
+      existingAnnotation: textAnnotation,
+    );
   }
 
   void _showTextEditDialog({
     required String initialText,
     required Offset position,
     required bool isEditing,
+    TextAnnotation? existingAnnotation,
   }) {
     final textController = TextEditingController(text: initialText);
     
@@ -1517,120 +1491,68 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () async {
+            onPressed: () {
               final newText = textController.text.trim();
-              if (newText.isNotEmpty || (isEditing && newText.isEmpty)) {
-                Navigator.pop(context);
-                
-                // Validate: don't allow empty text when adding new
-                if (!isEditing && newText.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Please enter some text'),
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                  return;
-                }
-                
-                // Show loading
-                if (mounted) {
-                  showDialog(
-                    context: context,
-                    barrierDismissible: false,
-                    builder: (context) => const Center(
-                      child: CircularProgressIndicator(),
-                    ),
-                  );
-                }
-                
-                try {
-                  // Edit or add text in PDF
-                  final success = isEditing
-                      ? await PDFTextEditorService.editTextInPDF(
-                          widget.filePath,
-                          _currentPage - 1,
-                          initialText,
-                          newText,
-                          position,
-                        )
-                      : await PDFTextEditorService.addTextToPDF(
-                          widget.filePath,
-                          _currentPage - 1,
-                          newText,
-                          position,
-                          color: _selectedColor,
-                        );
-                  
-                  // Close loading
-                  if (mounted) {
-                    Navigator.pop(context);
-                  }
-                  
-                  if (success && mounted) {
-                    // Show success message immediately (don't wait for reload)
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(isEditing ? 'Text updated successfully' : 'Text added successfully'),
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                    
-                    // Reset text edit mode immediately
-                    setState(() {
-                      _isTextEditMode = false;
-                      _selectedTool = 'none';
-                    });
-                    
-                    // Reload PDF viewer in background (non-blocking)
-                    // Increment reload key to force PDF viewer to reload the modified file
-                    setState(() {
-                      _pdfReloadKey++; // Increment to force reload
-                    });
-                    
-                    // Jump to current page after reload completes (non-blocking)
-                    // Use a post-frame callback to ensure the viewer has started reloading
-                    WidgetsBinding.instance.addPostFrameCallback((_) {
-                      Future.delayed(const Duration(milliseconds: 200), () {
-                        if (mounted) {
-                          try {
-                            _pdfViewerController.jumpToPage(_currentPage);
-                          } catch (e) {
-                            // Ignore errors - viewer might still be loading
-                            print('Note: PDF viewer reloading, will jump to page when ready');
-                          }
-                        }
-                      });
-                    });
-                  } else if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Failed to update text. Please try again.'),
-                        duration: Duration(seconds: 2),
-                      ),
-                    );
-                  }
-                } catch (e) {
-                  // Close loading if still open
-                  if (mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error: ${e.toString()}'),
-                        duration: const Duration(seconds: 3),
-                      ),
-                    );
-                  }
-                }
-              } else if (!isEditing) {
-                // Show error for empty text when adding
+              
+              // Validate: don't allow empty text when adding new
+              if (!isEditing && newText.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
                     content: Text('Please enter some text'),
                     duration: Duration(seconds: 2),
                   ),
                 );
+                return;
               }
+              
+              Navigator.pop(context);
+              
+              if (isEditing && existingAnnotation != null) {
+                // Update existing text annotation
+                final index = _textAnnotations.indexWhere((t) => t.id == existingAnnotation.id);
+                if (index != -1) {
+                  setState(() {
+                    if (newText.isEmpty) {
+                      // Remove if text is empty
+                      _textAnnotations.removeAt(index);
+                    } else {
+                      // Update text
+                      _textAnnotations[index] = TextAnnotation(
+                        text: newText,
+                        position: existingAnnotation.position,
+                        color: existingAnnotation.color,
+                        fontSize: existingAnnotation.fontSize,
+                        pageNumber: existingAnnotation.pageNumber,
+                        documentY: existingAnnotation.documentY,
+                        id: existingAnnotation.id,
+                      );
+                    }
+                  });
+                }
+              } else {
+                // Add new text annotation instantly (Sejda-style - no PDF save)
+                final normalizedPosition = Offset(
+                  position.dx / MediaQuery.of(context).size.width,
+                  position.dy / MediaQuery.of(context).size.height,
+                );
+                
+                setState(() {
+                  _textAnnotations.add(TextAnnotation(
+                    text: newText,
+                    position: normalizedPosition,
+                    color: _selectedColor,
+                    fontSize: 12.0,
+                    pageNumber: _currentPage,
+                    documentY: position.dy + _pdfScrollOffset,
+                  ));
+                });
+              }
+              
+              // Reset text edit mode
+              setState(() {
+                _isTextEditMode = false;
+                _selectedTool = 'none';
+              });
             },
             child: Text(isEditing ? 'Update' : 'Add'),
           ),

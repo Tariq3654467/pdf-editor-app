@@ -3,6 +3,19 @@ import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:flutter/material.dart';
 
 class PDFTextEditorService {
+  // Get PDF document for coordinate calculations
+  static Future<sf.PdfDocument?> getPdfDocument(String pdfPath) async {
+    try {
+      final file = File(pdfPath);
+      if (!await file.exists()) return null;
+      final bytes = await file.readAsBytes();
+      return sf.PdfDocument(inputBytes: bytes);
+    } catch (e) {
+      print('Error loading PDF document: $e');
+      return null;
+    }
+  }
+
   // Extract text from a PDF page (simplified - just get all text)
   static Future<String> extractTextFromPage(String pdfPath, int pageIndex) async {
     try {
@@ -81,10 +94,10 @@ class PDFTextEditorService {
       final graphics = page.graphics;
       final pageSize = page.size;
       
-      // Convert screen coordinates (top-left origin) to PDF coordinates (bottom-left origin)
-      // PDF Y coordinate = page height - screen Y coordinate
+      // Position is already in PDF coordinates (passed from screen)
+      // Just clamp to page bounds
       final pdfX = position.dx.clamp(0.0, pageSize.width);
-      final pdfY = (pageSize.height - position.dy).clamp(0.0, pageSize.height);
+      final pdfY = position.dy.clamp(0.0, pageSize.height);
       
       // Add text
       final font = sf.PdfStandardFont(

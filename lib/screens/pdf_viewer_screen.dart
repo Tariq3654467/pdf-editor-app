@@ -1394,46 +1394,88 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     if (!_isTextEditMode || _selectedTool != 'text') return;
     
     try {
-      // Get the PDF viewer's render box to convert local coordinates
-      final RenderBox? renderBox = context.findRenderObject() as RenderBox?;
-      if (renderBox == null) {
-        print('Error: Could not find render box');
+      // Load PDF to get page dimensions
+      final document = await PDFTextEditorService.getPdfDocument(widget.filePath);
+      if (document == null) {
+        print('Error: Could not load PDF document');
         return;
       }
       
-      // Position is already in local coordinates relative to the PDF viewer
-      // We need to account for the current page's position in the scroll view
-      // For continuous scroll mode, we need to calculate which part of the page was tapped
-      final adjustedPosition = Offset(
-        position.dx,
-        position.dy + _pdfScrollOffset,
-      );
+      final pageIndex = _currentPage - 1;
+      if (pageIndex < 0 || pageIndex >= document.pages.count) {
+        document.dispose();
+        print('Error: Invalid page index');
+        return;
+      }
+      
+      final page = document.pages[pageIndex];
+      final pageSize = page.size;
+      document.dispose();
+      
+      // Get screen dimensions
+      final screenSize = MediaQuery.of(context).size;
+      
+      // Calculate scale factor - PDF pages are scaled to fit screen width
+      final scale = screenSize.width / pageSize.width;
+      
+      // Convert screen coordinates to PDF coordinates
+      // X is straightforward - just divide by scale
+      final pdfX = (position.dx / scale).clamp(0.0, pageSize.width);
+      
+      // For Y: position.dy is from top of visible viewport
+      // In continuous scroll, we need to account for scroll position
+      // The scroll offset tells us how far we've scrolled in the document
+      // Calculate which part of the current page is visible
+      final scaledPageHeight = pageSize.height * scale;
+      
+      // Get scroll position within current page (modulo page height)
+      // This tells us how far into the current page we've scrolled
+      final scrollInCurrentPage = _pdfScrollOffset % scaledPageHeight;
+      
+      // The tap Y position relative to the top of the current page
+      // If we've scrolled down in the page, we need to add that offset
+      final pageRelativeY = position.dy + scrollInCurrentPage;
+      
+      // Clamp to page bounds
+      final clampedPageY = pageRelativeY.clamp(0.0, scaledPageHeight);
+      
+      // Convert to PDF coordinates (PDF uses bottom-left origin)
+      // So: pdfY = pageHeight - (screenY / scale)
+      final pdfY = (pageSize.height - (clampedPageY / scale)).clamp(0.0, pageSize.height);
+      
+      final pdfPosition = Offset(pdfX, pdfY);
+      
+      print('Tap: screen(${position.dx.toStringAsFixed(1)}, ${position.dy.toStringAsFixed(1)}), '
+          'scroll: ${_pdfScrollOffset.toStringAsFixed(1)}, '
+          'scrollInPage: ${scrollInCurrentPage.toStringAsFixed(1)}, '
+          'page: $pageIndex, '
+          'pdf(${pdfX.toStringAsFixed(1)}, ${pdfY.toStringAsFixed(1)})');
       
       // Try to find existing text at this position
       final textElement = await PDFTextEditorService.findTextAtPoint(
         widget.filePath,
-        _currentPage - 1, // Convert to 0-based index
-        adjustedPosition,
+        pageIndex,
+        pdfPosition,
       );
       
       if (textElement != null) {
         // Edit existing text
         _showTextEditDialog(
           initialText: textElement.text,
-          position: adjustedPosition,
+          position: pdfPosition,
           isEditing: true,
         );
       } else {
         // Add new text
         _showTextEditDialog(
           initialText: '',
-          position: adjustedPosition,
+          position: pdfPosition,
           isEditing: false,
         );
       }
     } catch (e) {
       print('Error handling text edit tap: $e');
-      // Fallback to simple text input
+      // Fallback to simple text input - use raw position
       _showTextEditDialog(
         initialText: '',
         position: position,

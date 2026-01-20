@@ -1567,28 +1567,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   }
                   
                   if (success && mounted) {
-                    // Reload PDF viewer by incrementing the reload key
-                    // This forces the PDF viewer to reload the file
-                    setState(() {
-                      _isLoading = true;
-                      _pdfReloadKey++; // Increment key to force reload
-                    });
-                    
-                    // Wait a moment for the PDF to reload
-                    await Future.delayed(const Duration(milliseconds: 300));
-                    
-                    // Jump to current page after reload
-                    if (mounted) {
-                      try {
-                        _pdfViewerController.jumpToPage(_currentPage);
-                      } catch (e) {
-                        print('Error jumping to page after reload: $e');
-                      }
-                      setState(() {
-                        _isLoading = false;
-                      });
-                    }
-                    
+                    // Show success message immediately (don't wait for reload)
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
                         content: Text(isEditing ? 'Text updated successfully' : 'Text added successfully'),
@@ -1596,9 +1575,31 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                       ),
                     );
                     
+                    // Reset text edit mode immediately
                     setState(() {
                       _isTextEditMode = false;
                       _selectedTool = 'none';
+                    });
+                    
+                    // Reload PDF viewer in background (non-blocking)
+                    // Increment reload key to force PDF viewer to reload the modified file
+                    setState(() {
+                      _pdfReloadKey++; // Increment to force reload
+                    });
+                    
+                    // Jump to current page after reload completes (non-blocking)
+                    // Use a post-frame callback to ensure the viewer has started reloading
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      Future.delayed(const Duration(milliseconds: 200), () {
+                        if (mounted) {
+                          try {
+                            _pdfViewerController.jumpToPage(_currentPage);
+                          } catch (e) {
+                            // Ignore errors - viewer might still be loading
+                            print('Note: PDF viewer reloading, will jump to page when ready');
+                          }
+                        }
+                      });
                     });
                   } else if (mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(

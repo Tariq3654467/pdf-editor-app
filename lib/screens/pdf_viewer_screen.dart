@@ -67,6 +67,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   final TextEditingController _searchController = TextEditingController();
   final ScrollController _pagePreviewScrollController = ScrollController();
 
+  // Helper to determine when a drawing tool is really active
+  bool get _isDrawingToolActive =>
+      _isEditingMode &&
+      (_selectedTool == 'pen' ||
+       _selectedTool == 'highlight' ||
+       _selectedTool == 'underline' ||
+       _selectedTool == 'eraser');
+
   @override
   void initState() {
     super.initState();
@@ -406,7 +414,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             key: _annotationOverlayKey,
             drawingColor: _getToolColor(),
             strokeWidth: _getStrokeWidth(),
-            isDrawing: _isEditingMode && (_selectedTool == 'pen' || _selectedTool == 'highlight' || _selectedTool == 'underline' || _selectedTool == 'eraser'),
+            isDrawing: _isDrawingToolActive,
             isEraser: _selectedTool == 'eraser',
             toolType: _selectedTool,
             currentPage: _currentPage,

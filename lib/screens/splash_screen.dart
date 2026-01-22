@@ -319,6 +319,11 @@ class _MyHomePageState extends State<MyHomePage> {
   List<PDFFile> pdfFiles = [];
   bool _isLoading = true;
   List<Map<String, dynamic>> _toolsHistory = [];
+  
+  // Pagination
+  static const int _itemsPerPage = 20;
+  int _currentPage = 0;
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
@@ -326,6 +331,63 @@ class _MyHomePageState extends State<MyHomePage> {
     _checkAndRequestAccess();
     _loadPDFs();
     _loadToolsHistory();
+    
+    // Setup scroll listener for pagination
+    _scrollController.addListener(_onScroll);
+  }
+  
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
+  }
+  
+  void _onScroll() {
+    if (_scrollController.position.pixels >= 
+        _scrollController.position.maxScrollExtent - 200) {
+      // Load more items when near bottom
+      _loadMoreItems();
+    }
+  }
+  
+  void _loadMoreItems() {
+    if (_showGroupedView && _selectedTabIndex == 0) {
+      // Paginate folders
+      final folders = _getGroupedPDFs();
+      final totalPages = (folders.length / _itemsPerPage).ceil();
+      if (_currentPage < totalPages - 1) {
+        setState(() {
+          _currentPage++;
+        });
+      }
+    } else {
+      // Paginate flat list
+      final filteredPDFs = _getFilteredPDFs();
+      final totalPages = (filteredPDFs.length / _itemsPerPage).ceil();
+      if (_currentPage < totalPages - 1) {
+        setState(() {
+          _currentPage++;
+        });
+      }
+    }
+  }
+  
+  List<PDFFile> _getPaginatedPDFs() {
+    final filteredPDFs = _getFilteredPDFs();
+    final endIndex = (_currentPage + 1) * _itemsPerPage;
+    return filteredPDFs.take(endIndex).toList();
+  }
+  
+  bool _hasMoreItems() {
+    if (_showGroupedView && _selectedTabIndex == 0) {
+      final folders = _getGroupedPDFs();
+      final totalPages = (folders.length / _itemsPerPage).ceil();
+      return _currentPage < totalPages - 1;
+    } else {
+      final filteredPDFs = _getFilteredPDFs();
+      final totalPages = (filteredPDFs.length / _itemsPerPage).ceil();
+      return _currentPage < totalPages - 1;
+    }
   }
   
   Future<void> _checkAndRequestAccess() async {
@@ -406,7 +468,7 @@ class _MyHomePageState extends State<MyHomePage> {
         // Request root-level access via MANAGE_EXTERNAL_STORAGE
         final granted = await PDFScannerService.requestStoragePermission();
         if (granted && mounted) {
-          _loadPDFs();
+          _loadPDFs(forceRescan: true);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Root access granted! Scanning all folders for PDFs...'),
@@ -425,7 +487,7 @@ class _MyHomePageState extends State<MyHomePage> {
         // Request folder access via SAF
         final granted = await PDFService.requestStorageAccess();
         if (granted && mounted) {
-          _loadPDFs();
+          _loadPDFs(forceRescan: true);
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('Folder access granted! Scanning for PDFs...'),
@@ -451,21 +513,28 @@ class _MyHomePageState extends State<MyHomePage> {
     });
   }
 
-  Future<void> _loadPDFs() async {
+  Future<void> _loadPDFs({bool forceRescan = false}) async {
     setState(() {
       _isLoading = true;
     });
 
-    // Use enhanced scanner service with isolate support
-    final loadedPDFs = await PDFScannerService.scanAllPDFs();
-    
-    setState(() {
-      pdfFiles = loadedPDFs;
-      _isLoading = false;
-    });
-    
-    // Also reload history when PDFs are loaded
-    await _loadToolsHistory();
+    try {
+      // Load from cache first (instant), then scan in background if needed
+      final loadedPDFs = await PDFScannerService.loadPDFs(forceRescan: forceRescan);
+      
+      setState(() {
+        pdfFiles = loadedPDFs;
+        _isLoading = false;
+      });
+      
+      // Also reload history when PDFs are loaded
+      await _loadToolsHistory();
+    } catch (e) {
+      print('Error loading PDFs: $e');
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   List<PDFFile> _getFilteredPDFs() {
@@ -496,7 +565,7 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _pickAndAddPDF() async {
     final filePath = await PDFService.pickPDFFile();
     if (filePath != null) {
-      _loadPDFs(); // Reload the list
+      _loadPDFs(forceRescan: false); // Reload the list from cache
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('PDF added successfully'),
@@ -541,8 +610,8 @@ class _MyHomePageState extends State<MyHomePage> {
                 ),
               ),
             );
-            // Reload PDF list
-            _loadPDFs();
+            // Reload PDF list (from cache, no rescan)
+            _loadPDFs(forceRescan: false);
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('PDF created successfully'),
@@ -904,6 +973,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       onPressed: () {
                         setState(() {
                           _showGroupedView = !_showGroupedView;
+                          _currentPage = 0; // Reset pagination when switching views
                         });
                       },
                       icon: Icon(
@@ -957,6 +1027,11 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Widget _buildPDFList() {
+    // Handle grouped view
+    if (_showGroupedView && _selectedTabIndex == 0) {
+      return _buildGroupedPDFListView();
+    }
+    
     final filteredPDFs = _getFilteredPDFs();
     
     if (filteredPDFs.isEmpty) {
@@ -1024,7 +1099,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 if (!Platform.isIOS) ...[
                   const SizedBox(height: 12),
                   TextButton(
-                    onPressed: _loadPDFs,
+                    onPressed: () => _loadPDFs(forceRescan: true),
                     child: const Text(
                       'Retry Scan',
                       style: TextStyle(color: Color(0xFFE53935)),
@@ -1038,7 +1113,10 @@ class _MyHomePageState extends State<MyHomePage> {
       );
     }
     
+    final paginatedPDFs = _getPaginatedPDFs();
+    
     return ListView(
+      controller: _scrollController,
       padding: const EdgeInsets.symmetric(
         horizontal: 16,
         vertical: 8,
@@ -1085,11 +1163,21 @@ class _MyHomePageState extends State<MyHomePage> {
               ],
             ),
           ),
-        // PDF List
-        ...filteredPDFs.map((pdf) => Padding(
+        // PDF List (paginated)
+        ...paginatedPDFs.map((pdf) => Padding(
           padding: const EdgeInsets.only(bottom: 12),
           child: _buildPDFTile(pdf),
         )),
+        // Load more indicator
+        if (_hasMoreItems())
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1179,6 +1267,95 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
+  Widget _buildGroupedPDFListView() {
+    final folders = _getGroupedPDFs();
+    if (folders.isEmpty) {
+      return Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.folder_outlined,
+                size: 64,
+                color: Color(0xFFBDBDBD),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'No PDFs found',
+                style: TextStyle(
+                  color: Color(0xFF9E9E9E),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    // Paginate folders
+    final endIndex = (_currentPage + 1) * _itemsPerPage;
+    final paginatedFolders = folders.take(endIndex).toList();
+    final hasMore = folders.length > endIndex;
+    
+    return ListView(
+      controller: _scrollController,
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      children: [
+        ...paginatedFolders.map((folder) {
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: Colors.grey[200]!),
+            ),
+            child: ExpansionTile(
+              leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
+              title: Text(
+                folder.folderName,
+                style: const TextStyle(
+                  color: Color(0xFF263238),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              subtitle: Text(
+                '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
+                style: const TextStyle(
+                  color: Color(0xFF9E9E9E),
+                  fontSize: 12,
+                ),
+              ),
+              children: folder.pdfs.map((pdf) {
+                return Padding(
+                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                  child: _buildPDFTile(pdf, isNested: true),
+                );
+              }).toList(),
+            ),
+          );
+        }),
+        if (hasMore)
+          Padding(
+            padding: const EdgeInsets.all(16.0),
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+  
   List<Widget> _buildGroupedPDFList() {
     final folders = _getGroupedPDFs();
     if (folders.isEmpty) {
@@ -1225,10 +1402,10 @@ class _MyHomePageState extends State<MyHomePage> {
     return GestureDetector(
       onTap: () async {
         if (pdf.filePath != null) {
-          // Track that this PDF was accessed
+          // Track that this PDF was accessed (updates cache automatically via reload)
           await PDFPreferencesService.setLastAccessed(pdf.filePath!);
           
-          // Navigate to PDF viewer and reload when returning
+          // Navigate to PDF viewer - opens instantly using cached file path
           await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => PDFViewerScreen(
@@ -1238,8 +1415,8 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           );
           
-          // Reload PDFs to update recent list and bookmarks
-          await _loadPDFs();
+          // Reload PDFs from cache to update recent list (no rescan, instant)
+          await _loadPDFs(forceRescan: false);
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -1311,6 +1488,8 @@ class _MyHomePageState extends State<MyHomePage> {
                     final index = pdfFiles.indexWhere((p) => p.filePath == pdf.filePath);
                     if (index != -1) {
                       pdfFiles[index].isFavorite = newBookmarkStatus;
+                      // Update cache with new bookmark status
+                      PDFCacheService.updatePDFInCache(pdfFiles[index]);
                     }
                   });
                 },

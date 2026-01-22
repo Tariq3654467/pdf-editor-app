@@ -4,16 +4,45 @@ import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter/foundation.dart';
 import '../models/pdf_file.dart';
 import 'pdf_service.dart';
 import 'pdf_preferences_service.dart';
+import 'pdf_cache_service.dart';
 
-/// Enhanced PDF Scanner Service with folder grouping
+/// Enhanced PDF Scanner Service with folder grouping and caching
 class PDFScannerService {
   static const MethodChannel _pdfScanChannel = MethodChannel('com.example.pdf_editor_app/pdf_scan');
+  static bool _isScanning = false;
   
-  /// Scan all PDFs automatically from device
-  static Future<List<PDFFile>> scanAllPDFs() async {
+  /// Load PDFs from cache or scan if cache doesn't exist
+  /// Returns cached PDFs immediately, then scans in background if needed
+  static Future<List<PDFFile>> loadPDFs({bool forceRescan = false}) async {
+    // Check cache first (unless forcing rescan)
+    if (!forceRescan) {
+      final cachedPDFs = await PDFCacheService.loadPDFList();
+      if (cachedPDFs.isNotEmpty) {
+        print('PDFScannerService: Loaded ${cachedPDFs.length} PDFs from cache');
+        // Trigger background refresh if cache is old (> 1 day)
+        final cacheTimestamp = await PDFCacheService.getCacheTimestamp();
+        if (cacheTimestamp != null) {
+          final age = DateTime.now().difference(cacheTimestamp);
+          if (age.inDays > 1) {
+            print('PDFScannerService: Cache is ${age.inDays} days old, refreshing in background...');
+            scanAllPDFsInBackground(); // Don't await - run in background
+          }
+        }
+        return cachedPDFs;
+      }
+    }
+    
+    // No cache or force rescan - scan now
+    print('PDFScannerService: No cache found or force rescan requested, scanning...');
+    return await scanAllPDFs();
+  }
+  
+  /// Scan all PDFs automatically from device (with caching)
+  static Future<List<PDFFile>> scanAllPDFs({bool saveToCache = true}) async {
     try {
       // Load preferences first
       final bookmarks = await PDFPreferencesService.getBookmarks();
@@ -160,6 +189,12 @@ class PDFScannerService {
           });
           
           print('PDFScannerService: Scanned ${pdfFiles.length} PDFs');
+          
+          // Save to cache
+          if (saveToCache) {
+            await PDFCacheService.savePDFList(pdfFiles);
+          }
+          
           return pdfFiles;
         } catch (e) {
           print('PDFScannerService: Error scanning PDFs: $e');
@@ -342,6 +377,178 @@ class PDFScannerService {
     }
     
     return false;
+  }
+  
+  /// Process scan results in background isolate (for heavy processing)
+  static Future<List<PDFFile>> _processScanResultsInIsolate(
+    List<dynamic> rawResults,
+    Set<String> bookmarks,
+    Map<String, String> recentAccess,
+  ) async {
+    return await compute(_processPDFData, {
+      'results': rawResults,
+      'bookmarks': bookmarks.toList(),
+      'recentAccess': recentAccess,
+    });
+  }
+  
+  /// Static function for isolate processing
+  static List<PDFFile> _processPDFData(Map<String, dynamic> data) {
+    final rawResults = data['results'] as List<dynamic>;
+    final bookmarks = (data['bookmarks'] as List<dynamic>).cast<String>().toSet();
+    final recentAccess = (data['recentAccess'] as Map<String, dynamic>).cast<String, String>();
+    
+    final List<PDFFile> pdfFiles = [];
+    final seenPaths = <String>{};
+    
+    for (var pdfData in rawResults) {
+      if (pdfData is! Map) continue;
+      
+      final filePath = pdfData['path'] as String?;
+      final fileName = pdfData['name'] as String? ?? 'Unknown';
+      final fileSize = pdfData['size'] as int? ?? 0;
+      final dateModified = pdfData['dateModified'] as int? ?? 0;
+      final isContentUri = pdfData['isContentUri'] as bool? ?? false;
+      final folderPath = pdfData['folderPath'] as String?;
+      final folderName = pdfData['folderName'] as String?;
+      
+      if (filePath == null || seenPaths.contains(filePath)) continue;
+      seenPaths.add(filePath);
+      
+      // Use folder info from native if available
+      String? finalFolderPath = folderPath;
+      String? finalFolderName = folderName;
+      
+      if (finalFolderPath == null || finalFolderName == null) {
+        if (isContentUri) {
+          final uriPath = filePath;
+          if (uriPath.contains('/')) {
+            final parts = uriPath.split('/');
+            if (parts.length > 1) {
+              finalFolderName = parts[parts.length - 2];
+              finalFolderPath = parts.sublist(0, parts.length - 1).join('/');
+            }
+          }
+        } else {
+          try {
+            final file = File(filePath);
+            final dir = file.parent;
+            finalFolderPath = dir.path;
+            finalFolderName = dir.path.split(Platform.pathSeparator).last;
+          } catch (e) {
+            finalFolderPath = null;
+            finalFolderName = 'Unknown';
+          }
+        }
+      }
+      
+      // Make folder name more readable
+      if (finalFolderName != null) {
+        final lowerName = finalFolderName.toLowerCase();
+        if (finalFolderName.isEmpty || finalFolderName == '/') {
+          finalFolderName = 'Root';
+        } else if (lowerName.contains('emulated')) {
+          finalFolderName = 'Internal Storage';
+        } else if (lowerName.contains('download')) {
+          finalFolderName = 'Downloads';
+        } else if (lowerName.contains('document')) {
+          finalFolderName = 'Documents';
+        }
+      }
+      
+      // For content URIs, trust metadata; for file paths, verify exists
+      bool fileExists = false;
+      int actualFileSize = fileSize;
+      DateTime actualModifiedDate = dateModified > 0
+          ? DateTime.fromMillisecondsSinceEpoch(dateModified)
+          : DateTime.now();
+      
+      if (isContentUri) {
+        fileExists = fileName.isNotEmpty && fileSize > 0;
+      } else {
+        try {
+          final file = File(filePath);
+          if (file.existsSync()) {
+            fileExists = true;
+            final stat = file.statSync();
+            actualFileSize = fileSize > 0 ? fileSize : stat.size;
+            actualModifiedDate = dateModified > 0
+                ? DateTime.fromMillisecondsSinceEpoch(dateModified)
+                : stat.modified;
+          }
+        } catch (e) {
+          continue; // Skip if file doesn't exist
+        }
+      }
+      
+      if (!fileExists) continue;
+      
+      // Format display name
+      final displayName = fileName.length > 25
+          ? '${fileName.substring(0, 22)}...'
+          : fileName;
+      
+      // Get bookmark and last accessed
+      final isBookmarked = bookmarks.contains(filePath);
+      final lastAccessedStr = recentAccess[filePath];
+      DateTime? lastAccessed;
+      if (lastAccessedStr != null) {
+        try {
+          lastAccessed = DateTime.parse(lastAccessedStr);
+        } catch (e) {
+          lastAccessed = null;
+        }
+      }
+      
+      pdfFiles.add(
+        PDFFile(
+          name: displayName,
+          date: PDFService.formatDate(actualModifiedDate),
+          size: PDFService.formatFileSize(actualFileSize),
+          isFavorite: isBookmarked,
+          filePath: filePath,
+          lastAccessed: lastAccessed,
+          folderPath: finalFolderPath,
+          folderName: finalFolderName ?? 'Unknown',
+          dateModified: actualModifiedDate,
+          fileSizeBytes: actualFileSize,
+        ),
+      );
+    }
+    
+    // Sort by date (newest first)
+    pdfFiles.sort((a, b) {
+      final aDate = a.dateModified ?? DateTime(1970);
+      final bDate = b.dateModified ?? DateTime(1970);
+      return bDate.compareTo(aDate);
+    });
+    
+    return pdfFiles;
+  }
+  
+  /// Scan PDFs in background (non-blocking)
+  static Future<void> scanAllPDFsInBackground() async {
+    if (_isScanning) {
+      print('PDFScannerService: Scan already in progress, skipping...');
+      return;
+    }
+    
+    _isScanning = true;
+    try {
+      // Run scan in background
+      await scanAllPDFs();
+      print('PDFScannerService: Background scan completed');
+    } catch (e) {
+      print('PDFScannerService: Background scan error: $e');
+    } finally {
+      _isScanning = false;
+    }
+  }
+  
+  /// Clear cache and rescan
+  static Future<List<PDFFile>> clearCacheAndRescan() async {
+    await PDFCacheService.clearCache();
+    return await scanAllPDFs();
   }
 }
 

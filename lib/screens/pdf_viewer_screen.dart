@@ -93,12 +93,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       // This helps ensure the controller is working
     });
     
-    // Set loading timeout (30 seconds)
-    _loadingTimeoutTimer = Timer(const Duration(seconds: 30), () {
-      if (mounted && _isLoading) {
+    // Set loading timeout (60 seconds for large PDFs)
+    _loadingTimeoutTimer = Timer(const Duration(seconds: 60), () {
+      if (mounted && _isLoading && _actualFilePath != null) {
+        // Only timeout if we have a file path but it's still loading
+        print('PDFViewer: Loading timeout after 60 seconds');
         setState(() {
           _isLoading = false;
-          _errorMessage = 'PDF took too long to load. The file might be corrupted or too large.';
+          _errorMessage = 'PDF took too long to load. The file might be very large or corrupted. Please try again.';
         });
       }
     });
@@ -106,41 +108,135 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   
   @override
   void dispose() {
+    // Cancel all timers
     _loadingTimeoutTimer?.cancel();
     _hidePageIndicatorTimer?.cancel();
     _scrollCheckTimer?.cancel();
+    _stopScrollCheckTimer();
+    
+    // Reset orientation to allow all orientations when leaving the screen
+    SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+      DeviceOrientation.landscapeLeft,
+      DeviceOrientation.landscapeRight,
+    ]);
+    
+    // Dispose controllers
     _pdfViewerController.dispose();
     _searchController.dispose();
     _pagePreviewScrollController.dispose();
+    
     super.dispose();
   }
   
   Future<void> _initializePDF() async {
     try {
+      print('PDFViewer: Initializing PDF with path: ${widget.filePath}');
+      
       // Check if filePath is a content URI
       if (widget.filePath.startsWith('content://')) {
+        print('PDFViewer: Detected content URI, copying to cache...');
         // Copy content URI to cache
         final tempPath = await _copyContentUriToCache(widget.filePath);
         if (tempPath != null) {
-          setState(() {
-            _actualFilePath = tempPath;
-          });
-          await _loadPDFInfo();
+          print('PDFViewer: Content URI copied to: $tempPath');
+          final tempFile = File(tempPath);
+          if (await tempFile.exists()) {
+            print('PDFViewer: Setting _actualFilePath to cached path: $tempPath');
+            setState(() {
+              _actualFilePath = tempPath;
+              // Keep _isLoading = true so PDF viewer shows loading indicator
+              // It will be set to false when _onDocumentLoaded is called
+            });
+            print('PDFViewer: _actualFilePath set, now loading PDF info...');
+            await _loadPDFInfo();
+            print('PDFViewer: PDF info loaded, _actualFilePath is: $_actualFilePath');
+            print('PDFViewer: PDF viewer should now be built with cached file path');
+          } else {
+            print('PDFViewer: Copied file does not exist at: $tempPath');
+            setState(() {
+              _isLoading = false;
+              _errorMessage = 'Failed to access PDF file. The file may have been moved or deleted.';
+            });
+          }
         } else {
+          print('PDFViewer: Failed to copy content URI to cache');
           setState(() {
             _isLoading = false;
             _errorMessage = 'Failed to access PDF file. Please try selecting the file again.';
           });
         }
       } else {
-        // Regular file path
-        setState(() {
-          _actualFilePath = widget.filePath;
-        });
-        await _loadPDFInfo();
+        // Regular file path - verify it exists and is readable
+        print('PDFViewer: Regular file path detected');
+        final file = File(widget.filePath);
+        if (await file.exists()) {
+          try {
+            final stat = await file.stat();
+            print('PDFViewer: File exists, size: ${stat.size} bytes, readable: ${await file.readAsBytes().then((_) => true).catchError((_) => false)}');
+            
+            // Verify file is readable and has valid PDF header
+            // Only read first 4 bytes to check header, not the entire file
+            try {
+              final randomAccessFile = await file.open();
+              try {
+                final bytes = await randomAccessFile.read(4);
+                await randomAccessFile.close();
+                
+                if (bytes.length >= 4) {
+                  final header = String.fromCharCodes(bytes);
+                  print('PDFViewer: File header: $header');
+                  if (header == '%PDF') {
+                    print('PDFViewer: Valid PDF file detected');
+                    setState(() {
+                      _actualFilePath = widget.filePath;
+                    });
+                    await _loadPDFInfo();
+                  } else {
+                    print('PDFViewer: File is not a valid PDF (header: $header)');
+                    setState(() {
+                      _isLoading = false;
+                      _errorMessage = 'The selected file is not a valid PDF file.';
+                    });
+                  }
+                } else {
+                  print('PDFViewer: File is too small or empty');
+                  setState(() {
+                    _isLoading = false;
+                    _errorMessage = 'The PDF file appears to be empty or corrupted.';
+                  });
+                }
+              } catch (readError) {
+                await randomAccessFile.close();
+                rethrow;
+              }
+            } catch (readError) {
+              print('PDFViewer: Error reading file header: $readError');
+              // If we can't read header, still try to load it (might be a permission issue or very large file)
+              print('PDFViewer: Proceeding without header validation');
+              setState(() {
+                _actualFilePath = widget.filePath;
+              });
+              await _loadPDFInfo();
+            }
+          } catch (e) {
+            print('PDFViewer: Error reading file: $e');
+            setState(() {
+              _isLoading = false;
+              _errorMessage = 'Cannot read PDF file. It may be corrupted or you may not have permission to access it.';
+            });
+          }
+        } else {
+          print('PDFViewer: File does not exist at: ${widget.filePath}');
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'PDF file not found. It may have been moved or deleted.';
+          });
+        }
       }
     } catch (e) {
-      print('Error initializing PDF: $e');
+      print('PDFViewer: Error initializing PDF: $e');
       setState(() {
         _isLoading = false;
         _errorMessage = 'Error loading PDF: ${e.toString()}';
@@ -150,10 +246,24 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   
   Future<String?> _copyContentUriToCache(String contentUri) async {
     try {
+      print('PDFViewer: Copying content URI: $contentUri');
       final String? result = await _fileChannel.invokeMethod('copyContentUriToCache', contentUri);
-      return result;
+      if (result != null) {
+        print('PDFViewer: Content URI copied successfully to: $result');
+        final file = File(result);
+        if (await file.exists()) {
+          print('PDFViewer: Copied file exists, size: ${await file.length()} bytes');
+          return result;
+        } else {
+          print('PDFViewer: Copied file does not exist');
+          return null;
+        }
+      } else {
+        print('PDFViewer: Content URI copy returned null');
+        return null;
+      }
     } catch (e) {
-      print('Error copying content URI: $e');
+      print('PDFViewer: Error copying content URI: $e');
       return null;
     }
   }
@@ -215,33 +325,38 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
 
   void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
+    print('PDFViewer: Document loaded successfully, pages: ${details.document.pages.count}');
     _loadingTimeoutTimer?.cancel();
-    setState(() {
-      _totalPages = details.document.pages.count;
-      _isLoading = false;
-      _errorMessage = null; // Clear any previous errors
-    });
-    // Scroll to current page after document loads - use multiple callbacks to ensure it works
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted) {
-        _scrollToCurrentPage();
-      }
-    });
-    // Also try after a longer delay to ensure the preview bar is fully built
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) {
-        _scrollToCurrentPage();
-      }
-    });
+    if (mounted) {
+      setState(() {
+        _totalPages = details.document.pages.count;
+        _isLoading = false;
+        _errorMessage = null; // Clear any previous errors
+      });
+      // Scroll to current page after document loads - use multiple callbacks to ensure it works
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _scrollToCurrentPage();
+        }
+      });
+      // Also try after a longer delay to ensure the preview bar is fully built
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _scrollToCurrentPage();
+        }
+      });
+    }
   }
   
   void _onDocumentLoadFailed(PdfDocumentLoadFailedDetails details) {
+    print('PDFViewer: Document load failed: ${details.error}');
     _loadingTimeoutTimer?.cancel();
-    setState(() {
-      _isLoading = false;
-      _errorMessage = 'Failed to load PDF: ${details.error}';
-    });
-    print('PDF load failed: ${details.error}');
+    if (mounted) {
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Failed to load PDF: ${details.error}\n\nThe file might be corrupted or in an unsupported format.';
+      });
+    }
   }
 
   Widget _buildPDFViewer() {
@@ -300,8 +415,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       );
     }
     
-    // Show loading indicator
-    if (_isLoading || _actualFilePath == null) {
+    // Show loading indicator only if we don't have a file path yet
+    // Once we have _actualFilePath, build the PDF viewer (it will show its own loading)
+    if (_actualFilePath == null) {
+      print('PDFViewer: Waiting for file path...');
       return const Center(
         child: CircularProgressIndicator(
           valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
@@ -310,13 +427,95 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
     
     // Build PDF viewer with actual file path
+    // Ensure we're using the cached file path, not the content URI
+    final filePath = _actualFilePath!;
+    print('PDFViewer: Building PDF viewer with file path: $filePath');
+    
+    // Double-check it's not a content URI
+    if (filePath.startsWith('content://')) {
+      print('PDFViewer: ERROR - Still using content URI! This should not happen.');
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Color(0xFFE53935),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'Configuration Error',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF263238),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'Unable to process content URI. Please try again.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF757575),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    // Verify file exists before building viewer
+    final file = File(filePath);
+    if (!file.existsSync()) {
+      print('PDFViewer: File does not exist at: $filePath');
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Color(0xFFE53935),
+              ),
+              const SizedBox(height: 16),
+              const Text(
+                'File Not Found',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF263238),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'The PDF file was not found at:\n$filePath',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF757575),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    print('PDFViewer: File exists, building PDF viewer...');
     final pdfViewer = _isTextEditMode && _selectedTool == 'text'
         ? GestureDetector(
             onTapDown: (details) => _handleTextEditTap(details.localPosition),
             behavior: HitTestBehavior.translucent,
             child: SfPdfViewer.file(
-              File(_actualFilePath!),
-              key: ValueKey('pdf_viewer_${_actualFilePath}_$_viewMode$_pdfReloadKey'),
+              file,
+              key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
               controller: _pdfViewerController,
               onDocumentLoaded: _onDocumentLoaded,
               onDocumentLoadFailed: _onDocumentLoadFailed,
@@ -328,8 +527,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             ),
           )
         : SfPdfViewer.file(
-            File(_actualFilePath!),
-            key: ValueKey('pdf_viewer_${_actualFilePath}_$_viewMode$_pdfReloadKey'),
+            file,
+            key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
             controller: _pdfViewerController,
             onDocumentLoaded: _onDocumentLoaded,
             onDocumentLoadFailed: _onDocumentLoadFailed,
@@ -1864,22 +2063,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
 
-  @override
-  void dispose() {
-    // Reset orientation to allow all orientations when leaving the screen
-    SystemChrome.setPreferredOrientations([
-      DeviceOrientation.portraitUp,
-      DeviceOrientation.portraitDown,
-      DeviceOrientation.landscapeLeft,
-      DeviceOrientation.landscapeRight,
-    ]);
-    _pdfViewerController.dispose();
-    _searchController.dispose();
-    _pagePreviewScrollController.dispose();
-    _hidePageIndicatorTimer?.cancel();
-    _stopScrollCheckTimer();
-    super.dispose();
-  }
 
   void _showViewModeBottomSheet() {
     final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;

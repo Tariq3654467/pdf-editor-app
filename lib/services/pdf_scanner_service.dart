@@ -55,8 +55,18 @@ class PDFScannerService {
           final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs');
         
           if (result == null || result is! List) {
-            print('PDFScannerService: Invalid scan result');
-            return await _scanAppDirectory(bookmarks, recentAccess);
+            print('PDFScannerService: Invalid scan result, falling back to app directory scan');
+            return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
+          }
+          
+          // If result is empty list and no root access, also scan app directory
+          if (result.isEmpty) {
+            final hasRootAccess = await Permission.manageExternalStorage.isGranted;
+            final hasSAFAccess = await PDFService.hasStorageAccess();
+            if (!hasRootAccess && !hasSAFAccess) {
+              print('PDFScannerService: No root/SAF access and empty scan result, scanning app directory');
+              return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
+            }
           }
           
           final List<PDFFile> pdfFiles = [];
@@ -199,15 +209,15 @@ class PDFScannerService {
         } catch (e) {
           print('PDFScannerService: Error scanning PDFs: $e');
           // Fallback to app directory scan if native scan fails
-          return await _scanAppDirectory(bookmarks, recentAccess);
+          return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
         }
       } else if (Platform.isIOS) {
         // iOS: Scan app directory only (graceful fallback)
         // iOS doesn't allow device-wide scanning, so we only show imported PDFs
-        return await _scanAppDirectory(bookmarks, recentAccess);
+        return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
       } else {
         // Other platforms: scan app directory
-        return await _scanAppDirectory(bookmarks, recentAccess);
+        return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
       }
     } catch (e) {
       print('PDFScannerService: Error scanning PDFs: $e');
@@ -216,21 +226,28 @@ class PDFScannerService {
   }
   
   /// Scan app directory (for non-Android platforms or fallback)
+  /// This is used when root access is not available - scans only app's PDF directory
   static Future<List<PDFFile>> _scanAppDirectory(
     Set<String> bookmarks,
-    Map<String, String> recentAccess,
-  ) async {
+    Map<String, String> recentAccess, {
+    bool saveToCache = true,
+  }) async {
     final List<PDFFile> pdfFiles = [];
     
     try {
       final directory = await getApplicationDocumentsDirectory();
       final pdfDirectory = Directory('${directory.path}/PDFs');
       
-      if (await pdfDirectory.exists()) {
-        final files = pdfDirectory.listSync();
-        
-        for (var file in files) {
-          if (file is File && file.path.toLowerCase().endsWith('.pdf')) {
+      // Create directory if it doesn't exist
+      if (!await pdfDirectory.exists()) {
+        await pdfDirectory.create(recursive: true);
+      }
+      
+      final files = pdfDirectory.listSync();
+      
+      for (var file in files) {
+        if (file is File && file.path.toLowerCase().endsWith('.pdf')) {
+          try {
             final stat = await file.stat();
             final fileName = path.basename(file.path);
             
@@ -261,8 +278,25 @@ class PDFScannerService {
                 fileSizeBytes: stat.size,
               ),
             );
+          } catch (e) {
+            print('PDFScannerService: Error processing file ${file.path}: $e');
+            // Continue with other files
           }
         }
+      }
+      
+      // Sort by date (newest first)
+      pdfFiles.sort((a, b) {
+        final aDate = a.dateModified ?? DateTime(1970);
+        final bDate = b.dateModified ?? DateTime(1970);
+        return bDate.compareTo(aDate);
+      });
+      
+      print('PDFScannerService: Scanned ${pdfFiles.length} PDFs from app directory');
+      
+      // Save to cache if requested
+      if (saveToCache && pdfFiles.isNotEmpty) {
+        await PDFCacheService.savePDFList(pdfFiles);
       }
     } catch (e) {
       print('PDFScannerService: Error scanning app directory: $e');

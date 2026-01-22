@@ -565,13 +565,76 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _pickAndAddPDF() async {
     final filePath = await PDFService.pickPDFFile();
     if (filePath != null) {
-      _loadPDFs(forceRescan: false); // Reload the list from cache
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('PDF added successfully'),
-          duration: Duration(seconds: 2),
-        ),
-      );
+      try {
+        // Create PDFFile object from the newly added file
+        final file = File(filePath);
+        if (await file.exists()) {
+          final stat = await file.stat();
+          final fileName = path.basename(filePath);
+          final displayName = fileName.length > 25
+              ? '${fileName.substring(0, 22)}...'
+              : fileName;
+          
+          // Get bookmarks and recent access
+          final bookmarks = await PDFPreferencesService.getBookmarks();
+          final isBookmarked = bookmarks.contains(filePath);
+          
+          final newPDF = PDFFile(
+            name: displayName,
+            date: PDFService.formatDate(stat.modified),
+            size: PDFService.formatFileSize(stat.size),
+            isFavorite: isBookmarked,
+            filePath: filePath,
+            lastAccessed: null,
+            folderPath: file.parent.path,
+            folderName: 'App Files',
+            dateModified: stat.modified,
+            fileSizeBytes: stat.size,
+          );
+          
+          // Add to cache immediately
+          await PDFCacheService.addPDFToCache(newPDF);
+          
+          // Update local list
+          setState(() {
+            // Check if PDF already exists in list
+            final existingIndex = pdfFiles.indexWhere((p) => p.filePath == filePath);
+            if (existingIndex >= 0) {
+              // Update existing
+              pdfFiles[existingIndex] = newPDF;
+            } else {
+              // Add new
+              pdfFiles.insert(0, newPDF);
+            }
+            // Sort by date (newest first)
+            pdfFiles.sort((a, b) {
+              final aDate = a.dateModified ?? DateTime(1970);
+              final bDate = b.dateModified ?? DateTime(1970);
+              return bDate.compareTo(aDate);
+            });
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF added successfully'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } else {
+          // File doesn't exist, force rescan to pick it up
+          await _loadPDFs(forceRescan: true);
+        }
+      } catch (e) {
+        print('Error adding PDF to cache: $e');
+        // Fallback: force rescan of app directory only
+        await _loadPDFs(forceRescan: true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('PDF added successfully'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 

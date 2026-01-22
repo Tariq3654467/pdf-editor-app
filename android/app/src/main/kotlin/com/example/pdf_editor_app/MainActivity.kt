@@ -30,7 +30,8 @@ class MainActivity : FlutterActivity() {
         
         // Channel for file intent handling
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "getInitialFileIntent") {
+            when (call.method) {
+                "getInitialFileIntent" -> {
                 val intent = intent
                 if (intent?.action == Intent.ACTION_VIEW && intent.data != null) {
                     val uri = intent.data
@@ -56,8 +57,25 @@ class MainActivity : FlutterActivity() {
                 } else {
                     result.success(null)
                 }
+                }
+                "copyContentUriToCache" -> {
+                    try {
+                        val contentUriString = call.arguments as? String
+                        if (contentUriString != null) {
+                            val uri = Uri.parse(contentUriString)
+                            val filePath = copyContentUriToCache(uri)
+                            result.success(filePath)
             } else {
+                            result.error("INVALID_ARGUMENT", "Content URI string is null", null)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("PDFScan", "Error copying content URI", e)
+                        result.error("COPY_ERROR", e.message, null)
+                    }
+                }
+                else -> {
                 result.notImplemented()
+                }
             }
         }
         

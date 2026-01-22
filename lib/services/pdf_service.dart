@@ -3,11 +3,39 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:device_info_plus/device_info_plus.dart';
 import '../models/pdf_file.dart';
 import 'pdf_preferences_service.dart';
 
 class PDFService {
   static const MethodChannel _pdfScanChannel = MethodChannel('com.example.pdf_editor_app/pdf_scan');
+  
+  static Future<bool> hasStorageAccess() async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<bool>('hasStorageAccess');
+        return result ?? false;
+      } catch (e) {
+        print('PDFService: Error checking storage access: $e');
+        return false;
+      }
+    }
+    return false;
+  }
+  
+  static Future<bool> requestStorageAccess() async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<bool>('requestStorageAccess');
+        return result ?? false;
+      } catch (e) {
+        print('PDFService: Error requesting storage access: $e');
+        return false;
+      }
+    }
+    return false;
+  }
 
   static Future<List<PDFFile>> loadPDFsFromDevice() async {
     List<PDFFile> pdfFiles = [];
@@ -21,29 +49,92 @@ class PDFService {
       // First, scan all PDFs from device using platform channel (Android)
       if (Platform.isAndroid) {
         try {
-          final List<dynamic>? scannedPDFs = await _pdfScanChannel.invokeMethod<List<dynamic>>('scanPDFs');
-          if (scannedPDFs != null) {
+          // For Android 13+, READ_EXTERNAL_STORAGE is not effective
+          // We rely on MediaStore API which doesn't require special permissions
+          // For older Android versions, request storage permission
+          final deviceInfo = DeviceInfoPlugin();
+          final androidInfo = await deviceInfo.androidInfo;
+          final sdkInt = androidInfo.version.sdkInt;
+          
+          if (sdkInt < 33) { // Android 12 and below
+            if (await Permission.storage.isDenied) {
+              print('PDFService: Requesting storage permission for Android < 13...');
+              final status = await Permission.storage.request();
+              if (status.isDenied) {
+                print('PDFService: Storage permission denied, scanning may be limited');
+              }
+            }
+          } else {
+            print('PDFService: Android 13+ detected - using MediaStore API (no special permissions needed)');
+          }
+          
+          print('PDFService: Starting device scan...');
+          final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs');
+          print('PDFService: Scan result type: ${result.runtimeType}');
+          
+          if (result == null) {
+            print('PDFService: Scan returned null - method channel may have failed');
+          } else if (result is List) {
+            print('PDFService: Found ${result.length} PDFs from device scan');
+            final List<dynamic> scannedPDFs = result;
             for (var pdfData in scannedPDFs) {
               if (pdfData is Map) {
                 final filePath = pdfData['path'] as String?;
                 final fileName = pdfData['name'] as String? ?? 'Unknown';
                 final fileSize = pdfData['size'] as int? ?? 0;
                 final dateModified = pdfData['dateModified'] as int? ?? 0;
+                final isContentUri = pdfData['isContentUri'] as bool? ?? false;
 
                 if (filePath != null && !seenPaths.contains(filePath)) {
                   seenPaths.add(filePath);
                   
-                  // Verify file exists
-                  final file = File(filePath);
-                  if (await file.exists()) {
-                    final stat = await file.stat();
+                  // Handle both file paths and content URIs
+                  bool fileExists = false;
+                  int actualFileSize = fileSize;
+                  DateTime actualModifiedDate = dateModified > 0
+                      ? DateTime.fromMillisecondsSinceEpoch(dateModified)
+                      : DateTime.now();
+                  
+                  if (isContentUri) {
+                    // For content URIs, we can't check file.exists() directly
+                    // Accept it if we have valid metadata - content URIs are valid
+                    fileExists = fileName.isNotEmpty && fileName != 'Unknown';
+                    // Use provided metadata for content URIs
+                    if (fileSize > 0) {
+                      actualFileSize = fileSize;
+                    }
+                    if (dateModified > 0) {
+                      actualModifiedDate = DateTime.fromMillisecondsSinceEpoch(dateModified);
+                    }
+                  } else {
+                    // For file paths, verify file exists
+                    try {
+                      final file = File(filePath);
+                      if (await file.exists()) {
+                        fileExists = true;
+                        try {
+                          final stat = await file.stat();
+                          actualFileSize = fileSize > 0 ? fileSize : stat.size;
+                          actualModifiedDate = dateModified > 0
+                              ? DateTime.fromMillisecondsSinceEpoch(dateModified)
+                              : stat.modified;
+                        } catch (e) {
+                          // Can't read stat, but file exists - use provided metadata
+                          print('PDFService: Could not read file stat for $filePath: $e');
+                        }
+                      }
+                    } catch (e) {
+                      // File might not be accessible, skip it
+                      print('PDFService: Error accessing file $filePath: $e');
+                      continue;
+                    }
+                  }
+                  
+                  if (fileExists) {
                     final displayName = fileName.length > 25
                         ? '${fileName.substring(0, 22)}...'
                         : fileName;
-                    final formattedSize = formatFileSize(fileSize > 0 ? fileSize : stat.size);
-                    final modifiedDate = dateModified > 0
-                        ? DateTime.fromMillisecondsSinceEpoch(dateModified)
-                        : stat.modified;
+                    final formattedSize = formatFileSize(actualFileSize);
 
                     // Get bookmark status and last accessed time
                     final isBookmarked = bookmarks.contains(filePath);
@@ -60,7 +151,7 @@ class PDFService {
                     pdfFiles.add(
                       PDFFile(
                         name: displayName,
-                        date: formatDate(modifiedDate),
+                        date: formatDate(actualModifiedDate),
                         size: formattedSize,
                         isFavorite: isBookmarked,
                         filePath: filePath,
@@ -71,11 +162,16 @@ class PDFService {
                 }
               }
             }
+          } else {
+            print('PDFService: Unexpected result type: ${result.runtimeType}');
           }
-        } catch (e) {
-          print('Error scanning PDFs from device: $e');
-          // Fallback to directory scanning
+        } catch (e, stackTrace) {
+          print('PDFService: Error scanning PDFs from device: $e');
+          print('PDFService: Stack trace: $stackTrace');
+          // Continue with app directory scanning
         }
+      } else {
+        print('PDFService: Not Android platform, skipping device scan');
       }
 
       // Also scan app's PDF directory (for files copied/moved to app)
@@ -133,8 +229,11 @@ class PDFService {
 
       // Sort by date (newest first)
       pdfFiles.sort((a, b) => b.date.compareTo(a.date));
-    } catch (e) {
-      print('Error loading PDFs: $e');
+      
+      print('PDFService: Total PDFs loaded: ${pdfFiles.length}');
+    } catch (e, stackTrace) {
+      print('PDFService: Error loading PDFs: $e');
+      print('PDFService: Stack trace: $stackTrace');
     }
 
     return pdfFiles;

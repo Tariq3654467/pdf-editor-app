@@ -1,12 +1,15 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/scheduler.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as path;
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
+import '../services/pdf_scanner_service.dart';
+import '../models/pdf_file.dart' show PDFFile, PDFFolder;
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../models/pdf_file.dart';
@@ -309,6 +312,7 @@ class MyHomePage extends StatefulWidget {
 
 class _MyHomePageState extends State<MyHomePage> {
   int _selectedTabIndex = 0;
+  bool _showGroupedView = false; // Toggle between grouped and flat view
   int _selectedBottomNavIndex = 0;
   final ImagePicker _imagePicker = ImagePicker();
   List<PDFFile> pdfFiles = [];
@@ -318,8 +322,107 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
+    _checkAndRequestAccess();
     _loadPDFs();
     _loadToolsHistory();
+  }
+  
+  Future<void> _checkAndRequestAccess() async {
+    if (Platform.isAndroid) {
+      final hasAccess = await PDFService.hasStorageAccess();
+      if (!hasAccess && pdfFiles.isEmpty) {
+        // Show dialog to request access on first launch
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _showStorageAccessDialog();
+        });
+      }
+    }
+  }
+  
+  Future<void> _showStorageAccessDialog() async {
+    if (!mounted) return;
+    
+    final shouldRequest = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Enable Automatic PDF Loading'),
+        content: const Text(
+          'To automatically load ALL PDFs from your device, please grant storage access.\n\n'
+          '📱 For ROOT-LEVEL ACCESS (all folders):\n'
+          '1. Tap "Grant Root Access" below\n'
+          '2. You\'ll be taken to Settings\n'
+          '3. Find this app and enable "Allow access to manage all files"\n'
+          '4. Return to the app\n\n'
+          '📁 Alternative (folder access):\n'
+          '• Tap "Select Folder" to choose a specific folder\n'
+          '• Select "Downloads" or "Documents"\n'
+          '• App will scan that folder and subfolders',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, 'skip'),
+            child: const Text('Skip'),
+          ),
+          OutlinedButton(
+            onPressed: () => Navigator.pop(context, 'folder'),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFFE53935)),
+            ),
+            child: const Text('Select Folder', style: TextStyle(color: Color(0xFFE53935))),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, 'root'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+            ),
+            child: const Text('Grant Root Access', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    
+    if (shouldRequest != null && shouldRequest != 'skip' && mounted) {
+      if (shouldRequest == 'root') {
+        // Request root-level access via MANAGE_EXTERNAL_STORAGE
+        final granted = await PDFScannerService.requestStoragePermission();
+        if (granted && mounted) {
+          _loadPDFs();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Root access granted! Scanning all folders for PDFs...'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Please enable "Allow access to manage all files" in Settings, then return to the app.'),
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+      } else if (shouldRequest == 'folder') {
+        // Request folder access via SAF
+        final granted = await PDFService.requestStorageAccess();
+        if (granted && mounted) {
+          _loadPDFs();
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Folder access granted! Scanning for PDFs...'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('If you see "Can\'t use this folder", try selecting "Downloads" or "Documents" folder instead.'),
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+      }
+    }
   }
 
   Future<void> _loadToolsHistory() async {
@@ -334,7 +437,8 @@ class _MyHomePageState extends State<MyHomePage> {
       _isLoading = true;
     });
 
-    final loadedPDFs = await PDFService.loadPDFsFromDevice();
+    // Use enhanced scanner service with isolate support
+    final loadedPDFs = await PDFScannerService.scanAllPDFs();
     
     setState(() {
       pdfFiles = loadedPDFs;
@@ -362,6 +466,12 @@ class _MyHomePageState extends State<MyHomePage> {
       default:
         return pdfFiles;
     }
+  }
+  
+  // Get PDFs grouped by folder
+  List<PDFFolder> _getGroupedPDFs() {
+    final filtered = _getFilteredPDFs();
+    return PDFScannerService.groupPDFsByFolder(filtered);
   }
 
   Future<void> _pickAndAddPDF() async {
@@ -756,22 +866,43 @@ class _MyHomePageState extends State<MyHomePage> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(
-                '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
-                style: const TextStyle(
-                  color: Color(0xFF263238),
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
+              Flexible(
+                child: Text(
+                  '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
+                  style: const TextStyle(
+                    color: Color(0xFF263238),
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
               Row(
+                mainAxisSize: MainAxisSize.min,
                 children: [
+                  if (_selectedTabIndex == 0)
+                    IconButton(
+                      onPressed: () {
+                        setState(() {
+                          _showGroupedView = !_showGroupedView;
+                        });
+                      },
+                      icon: Icon(
+                        _showGroupedView ? Icons.list : Icons.folder,
+                        color: const Color(0xFF757575),
+                      ),
+                      tooltip: _showGroupedView ? 'Show List' : 'Group by Folder',
+                      padding: const EdgeInsets.all(8),
+                      constraints: const BoxConstraints(),
+                    ),
                   IconButton(
                     onPressed: () {
                       // Search functionality
                     },
                     icon: const Icon(Icons.search,
                         color: Color(0xFF757575)),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(),
                   ),
                   IconButton(
                     onPressed: () {
@@ -779,12 +910,16 @@ class _MyHomePageState extends State<MyHomePage> {
                     },
                     icon: const Icon(Icons.tune,
                         color: Color(0xFF757575)),
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(),
                   ),
                   IconButton(
                     onPressed: _pickAndAddPDF,
                     icon: const Icon(Icons.add,
                         color: Color(0xFF757575)),
                     tooltip: 'Add PDF',
+                    padding: const EdgeInsets.all(8),
+                    constraints: const BoxConstraints(),
                   ),
                 ],
               ),
@@ -820,49 +955,66 @@ class _MyHomePageState extends State<MyHomePage> {
           break;
         default:
           emptyTitle = 'No PDFs found';
-          emptyMessage = 'Add a PDF to get started';
+          emptyMessage = 'PDFs on your device couldn\'t be automatically loaded.\n\nThis may be due to Android storage restrictions.\n\nTap "Add PDF" to manually select PDF files.';
       }
       
       return Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Icon(
-              Icons.description_outlined,
-              size: 64,
-              color: Color(0xFFBDBDBD),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              emptyTitle,
-              style: const TextStyle(
-                color: Color(0xFF9E9E9E),
-                fontSize: 16,
-                fontWeight: FontWeight.w500,
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.description_outlined,
+                size: 64,
+                color: Color(0xFFBDBDBD),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              emptyMessage,
-              style: const TextStyle(
-                color: Color(0xFF9E9E9E),
-                fontSize: 14,
-              ),
-            ),
-            if (_selectedTabIndex == 0) ...[
               const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _pickAndAddPDF,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFFE53935),
+              Text(
+                emptyTitle,
+                style: const TextStyle(
+                  color: Color(0xFF9E9E9E),
+                  fontSize: 16,
+                  fontWeight: FontWeight.w500,
                 ),
-                child: const Text(
-                  'Add PDF',
-                  style: TextStyle(color: Colors.white),
-                ),
+                textAlign: TextAlign.center,
               ),
+              const SizedBox(height: 8),
+              Text(
+                emptyMessage,
+                style: const TextStyle(
+                  color: Color(0xFF9E9E9E),
+                  fontSize: 14,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (_selectedTabIndex == 0) ...[
+                const SizedBox(height: 24),
+                ElevatedButton.icon(
+                  onPressed: _pickAndAddPDF,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFFE53935),
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  ),
+                  icon: const Icon(Icons.add, color: Colors.white),
+                  label: Text(
+                    Platform.isIOS ? 'Import PDF' : 'Add PDF',
+                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                  ),
+                ),
+                if (!Platform.isIOS) ...[
+                  const SizedBox(height: 12),
+                  TextButton(
+                    onPressed: _loadPDFs,
+                    child: const Text(
+                      'Retry Scan',
+                      style: TextStyle(color: Color(0xFFE53935)),
+                    ),
+                  ),
+                ],
+              ],
             ],
-          ],
+          ),
         ),
       );
     }
@@ -1008,7 +1160,49 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  Widget _buildPDFTile(PDFFile pdf) {
+  List<Widget> _buildGroupedPDFList() {
+    final folders = _getGroupedPDFs();
+    if (folders.isEmpty) {
+      return [];
+    }
+    
+    return folders.map((folder) {
+      return Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.grey[200]!),
+        ),
+        child: ExpansionTile(
+          leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
+          title: Text(
+            folder.folderName,
+            style: const TextStyle(
+              color: Color(0xFF263238),
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          subtitle: Text(
+            '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
+            style: const TextStyle(
+              color: Color(0xFF9E9E9E),
+              fontSize: 12,
+            ),
+          ),
+          children: folder.pdfs.map((pdf) {
+            return Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+              child: _buildPDFTile(pdf, isNested: true),
+            );
+          }).toList(),
+        ),
+      );
+    }).toList();
+  }
+
+  Widget _buildPDFTile(PDFFile pdf, {bool isNested = false}) {
     return GestureDetector(
       onTap: () async {
         if (pdf.filePath != null) {
@@ -1072,7 +1266,9 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
           subtitle: Text(
-            '${pdf.date} • ${pdf.size}',
+            isNested 
+                ? '${pdf.date} • ${pdf.size}'
+                : '${pdf.folderName ?? "Unknown"} • ${pdf.date} • ${pdf.size}',
             style: const TextStyle(
               color: Color(0xFF9E9E9E),
               fontSize: 12,

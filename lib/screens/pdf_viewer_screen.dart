@@ -46,6 +46,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   double _pdfScrollOffset = 0.0; // Track PDF vertical scroll offset for annotations
   int _pdfReloadKey = 0; // Key to force PDF viewer reload after modifications
   
+  // Error handling
+  String? _errorMessage;
+  String? _actualFilePath; // May differ from widget.filePath if content URI was copied
+  Timer? _loadingTimeoutTimer;
+  static const MethodChannel _fileChannel = MethodChannel('com.example.pdf_editor_app/file_intent');
+  
   // Annotation/Editing state
   bool _isEditingMode = false;
   String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
@@ -79,13 +85,77 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   void initState() {
     super.initState();
     _pdfViewerController = PdfViewerController();
-    _loadPDFInfo();
+    _initializePDF();
     _autoBookmarkPDF();
     
     // Add listener to scroll controller to debug
     _pagePreviewScrollController.addListener(() {
       // This helps ensure the controller is working
     });
+    
+    // Set loading timeout (30 seconds)
+    _loadingTimeoutTimer = Timer(const Duration(seconds: 30), () {
+      if (mounted && _isLoading) {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'PDF took too long to load. The file might be corrupted or too large.';
+        });
+      }
+    });
+  }
+  
+  @override
+  void dispose() {
+    _loadingTimeoutTimer?.cancel();
+    _hidePageIndicatorTimer?.cancel();
+    _scrollCheckTimer?.cancel();
+    _pdfViewerController.dispose();
+    _searchController.dispose();
+    _pagePreviewScrollController.dispose();
+    super.dispose();
+  }
+  
+  Future<void> _initializePDF() async {
+    try {
+      // Check if filePath is a content URI
+      if (widget.filePath.startsWith('content://')) {
+        // Copy content URI to cache
+        final tempPath = await _copyContentUriToCache(widget.filePath);
+        if (tempPath != null) {
+          setState(() {
+            _actualFilePath = tempPath;
+          });
+          await _loadPDFInfo();
+        } else {
+          setState(() {
+            _isLoading = false;
+            _errorMessage = 'Failed to access PDF file. Please try selecting the file again.';
+          });
+        }
+      } else {
+        // Regular file path
+        setState(() {
+          _actualFilePath = widget.filePath;
+        });
+        await _loadPDFInfo();
+      }
+    } catch (e) {
+      print('Error initializing PDF: $e');
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'Error loading PDF: ${e.toString()}';
+      });
+    }
+  }
+  
+  Future<String?> _copyContentUriToCache(String contentUri) async {
+    try {
+      final String? result = await _fileChannel.invokeMethod('copyContentUriToCache', contentUri);
+      return result;
+    } catch (e) {
+      print('Error copying content URI: $e');
+      return null;
+    }
   }
 
   Future<void> _autoBookmarkPDF() async {
@@ -104,35 +174,52 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Future<void> _loadPDFInfo() async {
-    final file = File(widget.filePath);
-    if (await file.exists()) {
-      final stat = await file.stat();
-      final fileName = widget.fileName;
-      final fileSize = PDFService.formatFileSize(stat.size);
-      final modifiedDate = stat.modified;
-      final date = PDFService.formatDate(modifiedDate);
+    if (_actualFilePath == null) return;
+    
+    try {
+      final file = File(_actualFilePath!);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        final fileName = widget.fileName;
+        final fileSize = PDFService.formatFileSize(stat.size);
+        final modifiedDate = stat.modified;
+        final date = PDFService.formatDate(modifiedDate);
 
-      // Load bookmark status
-      final isBookmarked = await PDFPreferencesService.isBookmarked(widget.filePath);
-      
+        // Load bookmark status (use original filePath for bookmarking)
+        final isBookmarked = await PDFPreferencesService.isBookmarked(widget.filePath);
+        
+        setState(() {
+          _isFavorite = isBookmarked;
+          _pdfFileInfo = PDFFile(
+            name: fileName,
+            date: date,
+            size: fileSize,
+            isFavorite: isBookmarked,
+            filePath: widget.filePath,
+          );
+        });
+      } else {
+        setState(() {
+          _isLoading = false;
+          _errorMessage = 'PDF file not found. It may have been moved or deleted.';
+        });
+      }
+    } catch (e) {
+      print('Error loading PDF info: $e');
       setState(() {
-        _isFavorite = isBookmarked;
-        _pdfFileInfo = PDFFile(
-          name: fileName,
-          date: date,
-          size: fileSize,
-          isFavorite: isBookmarked,
-          filePath: widget.filePath,
-        );
+        _isLoading = false;
+        _errorMessage = 'Error accessing PDF file: ${e.toString()}';
       });
     }
   }
 
 
   void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
+    _loadingTimeoutTimer?.cancel();
     setState(() {
       _totalPages = details.document.pages.count;
       _isLoading = false;
+      _errorMessage = null; // Clear any previous errors
     });
     // Scroll to current page after document loads - use multiple callbacks to ensure it works
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -146,6 +233,114 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         _scrollToCurrentPage();
       }
     });
+  }
+  
+  void _onDocumentLoadFailed(PdfDocumentLoadFailedDetails details) {
+    _loadingTimeoutTimer?.cancel();
+    setState(() {
+      _isLoading = false;
+      _errorMessage = 'Failed to load PDF: ${details.error}';
+    });
+    print('PDF load failed: ${details.error}');
+  }
+
+  Widget _buildPDFViewer() {
+    // Show error if loading failed
+    if (_errorMessage != null) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(
+                Icons.error_outline,
+                size: 64,
+                color: Color(0xFFE53935),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                'Failed to Load PDF',
+                style: const TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF263238),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                _errorMessage!,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 14,
+                  color: Color(0xFF757575),
+                ),
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _errorMessage = null;
+                    _isLoading = true;
+                    _actualFilePath = null;
+                  });
+                  _initializePDF();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFE53935),
+                ),
+                child: const Text(
+                  'Retry',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+    
+    // Show loading indicator
+    if (_isLoading || _actualFilePath == null) {
+      return const Center(
+        child: CircularProgressIndicator(
+          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+        ),
+      );
+    }
+    
+    // Build PDF viewer with actual file path
+    final pdfViewer = _isTextEditMode && _selectedTool == 'text'
+        ? GestureDetector(
+            onTapDown: (details) => _handleTextEditTap(details.localPosition),
+            behavior: HitTestBehavior.translucent,
+            child: SfPdfViewer.file(
+              File(_actualFilePath!),
+              key: ValueKey('pdf_viewer_${_actualFilePath}_$_viewMode$_pdfReloadKey'),
+              controller: _pdfViewerController,
+              onDocumentLoaded: _onDocumentLoaded,
+              onDocumentLoadFailed: _onDocumentLoadFailed,
+              onPageChanged: _onPageChanged,
+              scrollDirection: _getScrollDirection(),
+              pageLayoutMode: _getPageLayoutMode(),
+              enableDoubleTapZooming: true,
+              enableTextSelection: false,
+            ),
+          )
+        : SfPdfViewer.file(
+            File(_actualFilePath!),
+            key: ValueKey('pdf_viewer_${_actualFilePath}_$_viewMode$_pdfReloadKey'),
+            controller: _pdfViewerController,
+            onDocumentLoaded: _onDocumentLoaded,
+            onDocumentLoadFailed: _onDocumentLoadFailed,
+            onPageChanged: _onPageChanged,
+            scrollDirection: _getScrollDirection(),
+            pageLayoutMode: _getPageLayoutMode(),
+            enableDoubleTapZooming: true,
+            enableTextSelection: true,
+          );
+    
+    return pdfViewer;
   }
 
   void _onPageChanged(PdfPageChangedDetails details) {
@@ -476,33 +671,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 }
                 return false;
               },
-              child: _isTextEditMode && _selectedTool == 'text'
-                  ? GestureDetector(
-                      onTapDown: (details) => _handleTextEditTap(details.localPosition),
-                      behavior: HitTestBehavior.translucent, // Allow scroll gestures to pass through
-                      child: SfPdfViewer.file(
-                        File(widget.filePath),
-                        key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode$_pdfReloadKey'), // Force rebuild when file changes
-                        controller: _pdfViewerController,
-                        onDocumentLoaded: _onDocumentLoaded,
-                        onPageChanged: _onPageChanged,
-                        scrollDirection: _getScrollDirection(),
-                        pageLayoutMode: _getPageLayoutMode(),
-                        enableDoubleTapZooming: true,
-                        enableTextSelection: false, // Disable text selection when in text edit mode
-                      ),
-                    )
-                  : SfPdfViewer.file(
-                      File(widget.filePath),
-                      key: ValueKey('pdf_viewer_${widget.filePath}_$_viewMode$_pdfReloadKey'), // Force rebuild when file changes
-                      controller: _pdfViewerController,
-                      onDocumentLoaded: _onDocumentLoaded,
-                      onPageChanged: _onPageChanged,
-                      scrollDirection: _getScrollDirection(),
-                      pageLayoutMode: _getPageLayoutMode(),
-                      enableDoubleTapZooming: true,
-                      enableTextSelection: true,
-                    ),
+            child: _buildPDFViewer(),
             ),
           ),
           // Page count indicator (briefly shown on page change)

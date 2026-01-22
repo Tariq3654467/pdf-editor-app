@@ -5,6 +5,7 @@ import 'package:flutter/scheduler.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as path;
+import 'package:permission_handler/permission_handler.dart';
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
 import '../services/pdf_service.dart';
@@ -329,18 +330,36 @@ class _MyHomePageState extends State<MyHomePage> {
   
   Future<void> _checkAndRequestAccess() async {
     if (Platform.isAndroid) {
-      final hasAccess = await PDFService.hasStorageAccess();
-      if (!hasAccess && pdfFiles.isEmpty) {
-        // Show dialog to request access on first launch
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _showStorageAccessDialog();
-        });
+      // Check if dialog has already been shown
+      final dialogShown = await PDFPreferencesService.hasPermissionDialogBeenShown();
+      
+      // Only show dialog if:
+      // 1. It hasn't been shown before
+      // 2. User doesn't have storage access
+      // 3. No PDFs were found (first launch or no access)
+      if (!dialogShown) {
+        final hasAccess = await PDFService.hasStorageAccess();
+        final hasManageStorage = await Permission.manageExternalStorage.isGranted;
+        
+        // Check if user has any form of access
+        if (!hasAccess && !hasManageStorage && pdfFiles.isEmpty) {
+          // Show dialog to request access on first launch
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _showStorageAccessDialog();
+          });
+        } else {
+          // User already has access, mark dialog as shown
+          await PDFPreferencesService.setPermissionDialogShown(true);
+        }
       }
     }
   }
   
   Future<void> _showStorageAccessDialog() async {
     if (!mounted) return;
+    
+    // Mark that dialog has been shown
+    await PDFPreferencesService.setPermissionDialogShown(true);
     
     final shouldRequest = await showDialog<String>(
       context: context,

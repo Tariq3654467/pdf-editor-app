@@ -1323,7 +1323,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Future<void> _printPDF() async {
     try {
-      final file = File(widget.filePath);
+      if (_actualFilePath == null) {
+        throw Exception('PDF file not available');
+      }
+      final file = File(_actualFilePath!);
       final bytes = await file.readAsBytes();
       
       await Printing.layoutPdf(
@@ -1472,10 +1475,13 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Future<void> _sharePDF() async {
     try {
-      final file = File(widget.filePath);
+      if (_actualFilePath == null) {
+        throw Exception('PDF file not available');
+      }
+      final file = File(_actualFilePath!);
       if (await file.exists()) {
         await Share.shareXFiles(
-          [XFile(widget.filePath)],
+          [XFile(_actualFilePath!)],
           text: 'Check out this PDF: ${widget.fileName}',
         );
       } else {
@@ -2090,7 +2096,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             child: ClipRRect(
               borderRadius: BorderRadius.circular(4),
               child: _PDFThumbnailViewer(
-                filePath: widget.filePath,
+                filePath: _actualFilePath ?? widget.filePath,
                 pageNumber: pageNumber,
               ),
             ),

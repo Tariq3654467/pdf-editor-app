@@ -5,6 +5,7 @@ class PDFPreferencesService {
   static const String _bookmarksKey = 'pdf_bookmarks';
   static const String _recentAccessKey = 'pdf_recent_access';
   static const String _toolsHistoryKey = 'pdf_tools_history';
+  static const String _permissionDialogShownKey = 'permission_dialog_shown';
 
   // Save bookmark status for a PDF file
   static Future<void> setBookmark(String filePath, bool isBookmarked) async {
@@ -127,6 +128,17 @@ class PDFPreferencesService {
   static Future<void> clearToolsHistory() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_toolsHistoryKey);
+  }
+
+  // Track if permission dialog has been shown
+  static Future<bool> hasPermissionDialogBeenShown() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_permissionDialogShownKey) ?? false;
+  }
+
+  static Future<void> setPermissionDialogShown(bool shown) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_permissionDialogShownKey, shown);
   }
 }
 

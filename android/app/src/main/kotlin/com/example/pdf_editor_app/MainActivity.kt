@@ -171,16 +171,33 @@ class MainActivity : FlutterActivity() {
         }
         
         // Also scan app's PDF directory
-        val appPdfDir = File(filesDir.parent, "PDFs")
-        if (appPdfDir.exists()) {
-            directories.add(appPdfDir.absolutePath)
+        try {
+            val appPdfDir = File(filesDir.parent, "PDFs")
+            if (appPdfDir.exists()) {
+                directories.add(appPdfDir.absolutePath)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        
+        // Also try app documents directory
+        try {
+            val appDocDir = getExternalFilesDir(null)?.parentFile
+            if (appDocDir != null) {
+                val pdfDir = File(appDocDir, "PDFs")
+                if (pdfDir.exists()) {
+                    directories.add(pdfDir.absolutePath)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
         
         for (dirPath in directories) {
             try {
                 val dir = File(dirPath)
                 if (dir.exists() && dir.isDirectory) {
-                    scanDirectoryForPDFs(dir, pdfList)
+                    scanDirectoryForPDFs(dir, pdfList, maxDepth = 3)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -190,15 +207,27 @@ class MainActivity : FlutterActivity() {
         return pdfList
     }
     
-    private fun scanDirectoryForPDFs(directory: File, pdfList: MutableList<Map<String, Any>>) {
+    private fun scanDirectoryForPDFs(
+        directory: File, 
+        pdfList: MutableList<Map<String, Any>>, 
+        currentDepth: Int = 0,
+        maxDepth: Int = 3
+    ) {
+        // Limit recursion depth to avoid performance issues
+        if (currentDepth >= maxDepth) {
+            return
+        }
+        
         try {
             val files = directory.listFiles()
             if (files != null) {
                 for (file in files) {
                     if (file.isDirectory) {
-                        // Recursively scan subdirectories (limit depth to avoid performance issues)
-                        if (file.name != "Android" && file.name != ".android_secure") {
-                            scanDirectoryForPDFs(file, pdfList)
+                        // Recursively scan subdirectories (skip system directories)
+                        if (file.name != "Android" && 
+                            file.name != ".android_secure" && 
+                            !file.name.startsWith(".")) {
+                            scanDirectoryForPDFs(file, pdfList, currentDepth + 1, maxDepth)
                         }
                     } else if (file.isFile && file.name.lowercase().endsWith(".pdf")) {
                         try {

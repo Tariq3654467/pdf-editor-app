@@ -13,6 +13,7 @@ import '../services/pdf_scanner_service.dart';
 import '../models/pdf_file.dart' show PDFFile, PDFFolder;
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../services/pdf_cache_service.dart';
 import '../models/pdf_file.dart';
 import 'pdf_viewer_screen.dart';
 import 'settings_screen.dart';

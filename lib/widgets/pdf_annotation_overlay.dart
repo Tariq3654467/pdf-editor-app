@@ -254,6 +254,17 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 
   @override
   Widget build(BuildContext context) {
+    // Check if we have any annotations to display or if we're currently drawing
+    final hasAnnotations = _paths.isNotEmpty || _currentPath.isNotEmpty;
+    final hasTextAnnotations = widget.textAnnotations != null && widget.textAnnotations!.isNotEmpty;
+    final shouldShowOverlay = widget.isDrawing || hasAnnotations || hasTextAnnotations;
+
+    // If not drawing and no annotations, return child directly without overlay
+    // This ensures zero interference with scrolling on devices like S23 Ultra
+    if (!shouldShowOverlay) {
+      return widget.child;
+    }
+
     // Build the annotation painter that displays all annotations
     // Use LayoutBuilder to get the current size for coordinate transformation
     final annotationPainter = LayoutBuilder(
@@ -273,7 +284,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     );
 
     // When drawing, wrap with GestureDetector to capture drawing gestures
-    // When not drawing, use IgnorePointer to let all touches pass through to PDF viewer
+    // When not drawing, use multiple layers of gesture blocking to ensure complete transparency
+    // For S23 Ultra and similar devices, this ensures gestures pass through completely
     final overlayWidget = widget.isDrawing
         ? GestureDetector(
             onPanStart: _onPanStart,
@@ -290,12 +302,15 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     // The overlay is positioned on top of the PDF viewer
     // Annotations are stored with normalized coordinates and will render
     // at their correct positions relative to the PDF content
+    // Use a Stack but ensure the overlay doesn't interfere with gestures when not drawing
     return Stack(
       children: [
-        widget.child, // PDF viewer
-        Positioned.fill(
-          child: overlayWidget, // Annotation overlay
-        ),
+        widget.child, // PDF viewer - receives all gestures normally
+        // Only add overlay if we need to show something
+        if (shouldShowOverlay)
+          Positioned.fill(
+            child: overlayWidget, // Annotation overlay
+          ),
       ],
     );
   }

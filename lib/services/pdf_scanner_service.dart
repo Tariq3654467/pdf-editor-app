@@ -570,19 +570,22 @@ class PDFScannerService {
   }
   
   /// Scan PDFs in background (non-blocking)
-  static Future<void> scanAllPDFsInBackground() async {
+  /// Returns a Future that completes when scan is done (for UI updates)
+  static Future<List<PDFFile>> scanAllPDFsInBackground() async {
     if (_isScanning) {
       print('PDFScannerService: Scan already in progress, skipping...');
-      return;
+      return [];
     }
     
     _isScanning = true;
     try {
       // Run scan in background
-      await scanAllPDFs();
-      print('PDFScannerService: Background scan completed');
+      final result = await scanAllPDFs();
+      print('PDFScannerService: Background scan completed with ${result.length} PDFs');
+      return result;
     } catch (e) {
       print('PDFScannerService: Background scan error: $e');
+      return [];
     } finally {
       _isScanning = false;
     }

@@ -18,27 +18,28 @@ class PDFScannerService {
   /// Load PDFs from cache or scan if cache doesn't exist
   /// Returns cached PDFs immediately, then scans in background if needed
   static Future<List<PDFFile>> loadPDFs({bool forceRescan = false}) async {
-    // Check cache first (unless forcing rescan)
-    if (!forceRescan) {
-      final cachedPDFs = await PDFCacheService.loadPDFList();
-      if (cachedPDFs.isNotEmpty) {
-        print('PDFScannerService: Loaded ${cachedPDFs.length} PDFs from cache');
-        // Trigger background refresh if cache is old (> 1 day)
-        final cacheTimestamp = await PDFCacheService.getCacheTimestamp();
-        if (cacheTimestamp != null) {
-          final age = DateTime.now().difference(cacheTimestamp);
-          if (age.inDays > 1) {
-            print('PDFScannerService: Cache is ${age.inDays} days old, refreshing in background...');
-            scanAllPDFsInBackground(); // Don't await - run in background
-          }
+    // Always check cache first and return immediately
+    final cachedPDFs = await PDFCacheService.loadPDFList();
+    
+    // If we have cache and not forcing rescan, return immediately and refresh in background
+    if (cachedPDFs.isNotEmpty && !forceRescan) {
+      print('PDFScannerService: Loaded ${cachedPDFs.length} PDFs from cache');
+      // Trigger background refresh if cache is old (> 1 day)
+      final cacheTimestamp = await PDFCacheService.getCacheTimestamp();
+      if (cacheTimestamp != null) {
+        final age = DateTime.now().difference(cacheTimestamp);
+        if (age.inDays > 1) {
+          print('PDFScannerService: Cache is ${age.inDays} days old, refreshing in background...');
+          scanAllPDFsInBackground(); // Don't await - run in background
         }
-        return cachedPDFs;
       }
+      return cachedPDFs;
     }
     
-    // No cache or force rescan - scan now
-    print('PDFScannerService: No cache found or force rescan requested, scanning...');
-    return await scanAllPDFs();
+    // No cache or force rescan - return empty list immediately, scan in background
+    print('PDFScannerService: No cache found or force rescan requested, scanning in background...');
+    scanAllPDFsInBackground(); // Don't await - run in background
+    return cachedPDFs; // Return cached (empty if no cache) immediately
   }
   
   /// Scan all PDFs automatically from device (with caching)
@@ -50,9 +51,16 @@ class PDFScannerService {
       
       if (Platform.isAndroid) {
         try {
-          // Call native method to scan PDFs (native code handles async operations)
+          // Call native method to scan PDFs with timeout (native code handles async operations)
           print('PDFScannerService: Starting automatic PDF scan...');
-          final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs');
+          final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs')
+              .timeout(
+                const Duration(seconds: 120), // 2 minute timeout
+                onTimeout: () {
+                  print('PDFScannerService: Scan timeout after 120 seconds');
+                  return <Map<String, dynamic>>[]; // Return empty on timeout
+                },
+              );
         
           if (result == null || result is! List) {
             print('PDFScannerService: Invalid scan result, falling back to app directory scan');
@@ -130,7 +138,7 @@ class PDFScannerService {
               }
             }
             
-            // Verify file exists (for file paths)
+            // Verify file exists (for file paths) - use sync for speed
             bool fileExists = false;
             int actualFileSize = fileSize;
             DateTime actualModifiedDate = dateModified > 0
@@ -143,9 +151,10 @@ class PDFScannerService {
             } else {
               try {
                 final file = File(filePath);
-                if (await file.exists()) {
+                // Use sync exists check for speed (non-blocking in isolate context)
+                if (file.existsSync()) {
                   fileExists = true;
-                  final stat = await file.stat();
+                  final stat = file.statSync();
                   actualFileSize = fileSize > 0 ? fileSize : stat.size;
                   actualModifiedDate = dateModified > 0
                       ? DateTime.fromMillisecondsSinceEpoch(dateModified)

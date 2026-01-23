@@ -515,26 +515,59 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadPDFs({bool forceRescan = false}) async {
-    setState(() {
-      _isLoading = true;
-    });
+    // Show loading only if we don't have cached data
+    final cachedPDFs = await PDFCacheService.loadPDFList();
+    if (cachedPDFs.isEmpty || forceRescan) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       // Load from cache first (instant), then scan in background if needed
       final loadedPDFs = await PDFScannerService.loadPDFs(forceRescan: forceRescan);
       
-      setState(() {
-        pdfFiles = loadedPDFs;
-        _isLoading = false;
-      });
+      // Update UI immediately with cached/initial results
+      if (mounted) {
+        setState(() {
+          pdfFiles = loadedPDFs;
+          _isLoading = false;
+        });
+      }
+      
+      // If we need to scan (no cache or force rescan), do it in background
+      if (loadedPDFs.isEmpty || forceRescan) {
+        // Scan in background and update UI when done
+        PDFScannerService.scanAllPDFsInBackground().then((scannedPDFs) {
+          if (mounted && scannedPDFs.isNotEmpty) {
+            setState(() {
+              pdfFiles = scannedPDFs;
+              _isLoading = false;
+            });
+          } else if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+          }
+        }).catchError((e) {
+          print('Error in background scan: $e');
+          if (mounted) {
+            setState(() {
+              _isLoading = false;
+            });
+          }
+        });
+      }
       
       // Also reload history when PDFs are loaded
       await _loadToolsHistory();
     } catch (e) {
       print('Error loading PDFs: $e');
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 

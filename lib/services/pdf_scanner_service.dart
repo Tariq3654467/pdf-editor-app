@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:permission_handler/permission_handler.dart';
@@ -9,6 +8,9 @@ import '../models/pdf_file.dart';
 import 'pdf_service.dart';
 import 'pdf_preferences_service.dart';
 import 'pdf_cache_service.dart';
+
+// Import dart:io (guarded with kIsWeb checks for web compatibility)
+import 'dart:io' as io;
 
 /// Enhanced PDF Scanner Service with folder grouping and caching
 class PDFScannerService {
@@ -49,7 +51,7 @@ class PDFScannerService {
       final bookmarks = await PDFPreferencesService.getBookmarks();
       final recentAccess = await PDFPreferencesService.getRecentAccess();
       
-      if (Platform.isAndroid) {
+      if (!kIsWeb && io.Platform.isAndroid) {
         try {
           // Call native method to scan PDFs with timeout (native code handles async operations)
           print('PDFScannerService: Starting automatic PDF scan...');
@@ -109,15 +111,27 @@ class PDFScannerService {
                     finalFolderPath = parts.sublist(0, parts.length - 1).join('/');
                   }
                 }
-              } else {
-                // For file paths, extract directory
+              } else if (!kIsWeb) {
+                // For file paths, extract directory (not on web)
                 try {
-                  final file = File(filePath);
+                  final file = io.File(filePath);
                   final dir = file.parent;
                   finalFolderPath = dir.path;
-                  finalFolderName = dir.path.split(Platform.pathSeparator).last;
+                  // Use '/' or '\' based on path content (works on all platforms)
+                  final pathParts = dir.path.split(RegExp(r'[/\\]'));
+                  finalFolderName = pathParts.isNotEmpty ? pathParts.last : 'Unknown';
                 } catch (e) {
                   // If we can't parse, use default
+                  finalFolderPath = null;
+                  finalFolderName = 'Unknown';
+                }
+              } else {
+                // On web, extract from path string
+                final pathParts = filePath.split(RegExp(r'[/\\]'));
+                if (pathParts.length > 1) {
+                  finalFolderName = pathParts[pathParts.length - 2];
+                  finalFolderPath = pathParts.sublist(0, pathParts.length - 1).join('/');
+                } else {
                   finalFolderPath = null;
                   finalFolderName = 'Unknown';
                 }
@@ -148,9 +162,9 @@ class PDFScannerService {
             if (isContentUri) {
               // For content URIs, trust the metadata
               fileExists = fileName.isNotEmpty && fileSize > 0;
-            } else {
+            } else if (!kIsWeb) {
               try {
-                final file = File(filePath);
+                final file = io.File(filePath);
                 // Use sync exists check for speed (non-blocking in isolate context)
                 if (file.existsSync()) {
                   fileExists = true;
@@ -163,6 +177,9 @@ class PDFScannerService {
               } catch (e) {
                 continue; // Skip if file doesn't exist
               }
+            } else {
+              // On web, trust metadata
+              fileExists = fileName.isNotEmpty && fileSize > 0;
             }
             
             if (!fileExists) continue;
@@ -220,7 +237,7 @@ class PDFScannerService {
           // Fallback to app directory scan if native scan fails
           return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
         }
-      } else if (Platform.isIOS) {
+      } else if (!kIsWeb && io.Platform.isIOS) {
         // iOS: Scan app directory only (graceful fallback)
         // iOS doesn't allow device-wide scanning, so we only show imported PDFs
         return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
@@ -243,9 +260,14 @@ class PDFScannerService {
   }) async {
     final List<PDFFile> pdfFiles = [];
     
+    // Web doesn't support file system access
+    if (kIsWeb) {
+      return pdfFiles;
+    }
+    
     try {
       final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
+      final pdfDirectory = io.Directory('${directory.path}/PDFs');
       
       // Create directory if it doesn't exist
       if (!await pdfDirectory.exists()) {
@@ -255,7 +277,7 @@ class PDFScannerService {
       final files = pdfDirectory.listSync();
       
       for (var file in files) {
-        if (file is File && file.path.toLowerCase().endsWith('.pdf')) {
+        if (file is io.File && file.path.toLowerCase().endsWith('.pdf')) {
           try {
             final stat = await file.stat();
             final fileName = path.basename(file.path);
@@ -366,7 +388,7 @@ class PDFScannerService {
   
   /// Request storage permission (Android)
   static Future<bool> requestStoragePermission() async {
-    if (!Platform.isAndroid) return true;
+    if (kIsWeb || !io.Platform.isAndroid) return true;
     
     try {
       final deviceInfo = await DeviceInfoPlugin().androidInfo;
@@ -472,13 +494,25 @@ class PDFScannerService {
               finalFolderPath = parts.sublist(0, parts.length - 1).join('/');
             }
           }
-        } else {
+        } else if (!kIsWeb) {
           try {
-            final file = File(filePath);
+            final file = io.File(filePath);
             final dir = file.parent;
             finalFolderPath = dir.path;
-            finalFolderName = dir.path.split(Platform.pathSeparator).last;
+            // Use '/' or '\' based on path content (works in isolates)
+            final pathParts = dir.path.split(RegExp(r'[/\\]'));
+            finalFolderName = pathParts.isNotEmpty ? pathParts.last : 'Unknown';
           } catch (e) {
+            finalFolderPath = null;
+            finalFolderName = 'Unknown';
+          }
+        } else {
+          // On web, extract from path string
+          final pathParts = filePath.split(RegExp(r'[/\\]'));
+          if (pathParts.length > 1) {
+            finalFolderName = pathParts[pathParts.length - 2];
+            finalFolderPath = pathParts.sublist(0, pathParts.length - 1).join('/');
+          } else {
             finalFolderPath = null;
             finalFolderName = 'Unknown';
           }
@@ -508,9 +542,9 @@ class PDFScannerService {
       
       if (isContentUri) {
         fileExists = fileName.isNotEmpty && fileSize > 0;
-      } else {
+      } else if (!kIsWeb) {
         try {
-          final file = File(filePath);
+          final file = io.File(filePath);
           if (file.existsSync()) {
             fileExists = true;
             final stat = file.statSync();
@@ -522,6 +556,9 @@ class PDFScannerService {
         } catch (e) {
           continue; // Skip if file doesn't exist
         }
+      } else {
+        // On web, trust metadata
+        fileExists = fileName.isNotEmpty && fileSize > 0;
       }
       
       if (!fileExists) continue;

@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/scheduler.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
+
+// Import dart:io (guarded with kIsWeb checks for web compatibility)
+import 'dart:io' as io;
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as path;
@@ -392,7 +395,7 @@ class _MyHomePageState extends State<MyHomePage> {
   }
   
   Future<void> _checkAndRequestAccess() async {
-    if (Platform.isAndroid) {
+    if (!kIsWeb && io.Platform.isAndroid) {
       // Check if dialog has already been shown
       final dialogShown = await PDFPreferencesService.hasPermissionDialogBeenShown();
       
@@ -597,11 +600,19 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _pickAndAddPDF() async {
+    if (kIsWeb) {
+      // Web doesn't support file system access
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('File picking not supported on web')),
+      );
+      return;
+    }
+    
     final filePath = await PDFService.pickPDFFile();
     if (filePath != null) {
       try {
         // Create PDFFile object from the newly added file
-        final file = File(filePath);
+        final file = io.File(filePath);
         if (await file.exists()) {
           final stat = await file.stat();
           final fileName = path.basename(filePath);
@@ -1189,11 +1200,11 @@ class _MyHomePageState extends State<MyHomePage> {
                   ),
                   icon: const Icon(Icons.add, color: Colors.white),
                   label: Text(
-                    Platform.isIOS ? 'Import PDF' : 'Add PDF',
+                    (kIsWeb || io.Platform.isIOS) ? 'Import PDF' : 'Add PDF',
                     style: const TextStyle(color: Colors.white, fontSize: 16),
                   ),
                 ),
-                if (!Platform.isIOS) ...[
+                if (!kIsWeb && !io.Platform.isIOS) ...[
                   const SizedBox(height: 12),
                   TextButton(
                     onPressed: () => _loadPDFs(forceRescan: true),
@@ -1678,7 +1689,13 @@ class _MyHomePageState extends State<MyHomePage> {
   Future<void> _sharePDF(PDFFile pdf) async {
     try {
       if (pdf.filePath != null) {
-        final file = File(pdf.filePath!);
+        if (kIsWeb) {
+          // On web, share without file existence check
+          await Share.share(pdf.filePath!, subject: pdf.name);
+          return;
+        }
+        
+        final file = io.File(pdf.filePath!);
         if (await file.exists()) {
           await Share.shareXFiles(
             [XFile(pdf.filePath!)],
@@ -1721,7 +1738,7 @@ class _MyHomePageState extends State<MyHomePage> {
           TextButton(
             onPressed: () async {
               try {
-                final file = File(pdf.filePath!);
+                final file = io.File(pdf.filePath!);
                 if (await file.exists()) {
                   await file.delete();
                   // Remove from bookmarks
@@ -1806,7 +1823,7 @@ class _MyHomePageState extends State<MyHomePage> {
               }
 
               try {
-                final oldFile = File(pdf.filePath!);
+                final oldFile = io.File(pdf.filePath!);
                 if (!await oldFile.exists()) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
@@ -1823,7 +1840,7 @@ class _MyHomePageState extends State<MyHomePage> {
                 final newPath = path.join(directory, newFileName);
 
                 // Check if file with new name already exists
-                final newFile = File(newPath);
+                final newFile = io.File(newPath);
                 if (await newFile.exists() && newPath != pdf.filePath) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(

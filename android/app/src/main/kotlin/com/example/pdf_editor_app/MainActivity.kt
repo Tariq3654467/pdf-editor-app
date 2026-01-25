@@ -208,7 +208,19 @@ class MainActivity : FlutterActivity() {
                 }
             }
             
+            // For Android 13+ (S23 Ultra), also try Documents collection
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                try {
+                    urisToQuery.add(MediaStore.Files.getContentUri("external"))
+                    // Android 13+ has better support for Documents collection
+                    android.util.Log.d("PDFScan", "Android 13+ detected - using enhanced MediaStore queries")
+                } catch (e: Exception) {
+                    android.util.Log.w("PDFScan", "Enhanced MediaStore URI not available")
+                }
+            }
+            
             // Try to get DATA column if available (available on Android < 10, deprecated on 10+)
+            // For Android 13+ (S23 Ultra), use optimized projection
             val projection = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
                 // Android < 10: DATA column is available and reliable
                 arrayOf(
@@ -218,8 +230,17 @@ class MainActivity : FlutterActivity() {
                     MediaStore.Files.FileColumns.DATE_MODIFIED,
                     MediaStore.Files.FileColumns.DATA
                 )
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                // Android 13+ (S23 Ultra): Use RELATIVE_PATH for better performance
+                arrayOf(
+                    MediaStore.Files.FileColumns._ID,
+                    MediaStore.Files.FileColumns.DISPLAY_NAME,
+                    MediaStore.Files.FileColumns.SIZE,
+                    MediaStore.Files.FileColumns.DATE_MODIFIED,
+                    MediaStore.Files.FileColumns.RELATIVE_PATH
+                )
             } else {
-                // Android 10+: DATA column is deprecated, use content URIs
+                // Android 10-12: DATA column is deprecated, use content URIs
                 arrayOf(
                     MediaStore.Files.FileColumns._ID,
                     MediaStore.Files.FileColumns.DISPLAY_NAME,
@@ -235,13 +256,22 @@ class MainActivity : FlutterActivity() {
             selections.add("${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("application/pdf"))
             
             // Also try with RELATIVE_PATH for Android 10+ (scoped storage)
+            // For Android 13+ (S23 Ultra), prioritize RELATIVE_PATH queries for better performance
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    // Try querying with RELATIVE_PATH to find PDFs in common directories
-                    selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
-                    selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Documents%", "%.pdf"))
-                    // Also try without MIME type restriction - just filename
-                    selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        // Android 13+ (S23 Ultra): Use optimized RELATIVE_PATH queries first
+                        selections.add(0, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("%Download%", "application/pdf"))
+                        selections.add(1, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("%Documents%", "application/pdf"))
+                        selections.add(2, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
+                        selections.add(3, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Documents%", "%.pdf"))
+                    } else {
+                        // Android 10-12: Try querying with RELATIVE_PATH to find PDFs in common directories
+                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
+                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Documents%", "%.pdf"))
+                        // Also try without MIME type restriction - just filename
+                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
+                    }
                 } catch (e: Exception) {
                     android.util.Log.w("PDFScan", "RELATIVE_PATH query not available")
                 }
@@ -319,6 +349,16 @@ class MainActivity : FlutterActivity() {
                                     // DATA column not available - this is normal on Android 10+
                                 }
                                 
+                                // For Android 13+ (S23 Ultra), also try to get RELATIVE_PATH column
+                                var relativePathColumn = -1
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    try {
+                                        relativePathColumn = it.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
+                                    } catch (e: Exception) {
+                                        // RELATIVE_PATH column not available
+                                    }
+                                }
+                                
                                 var count = 0
                                 val maxResults = 10000 // Limit results to prevent memory issues on Samsung devices
                                 
@@ -382,31 +422,60 @@ class MainActivity : FlutterActivity() {
                                         
                                         // For file paths, verify existence; for content URIs, accept them
                                         if (isContentUri) {
-                                            // Extract folder info from content URI
-                                            val folderPath = try {
-                                                val uriParts = filePath.split("/")
-                                                if (uriParts.size > 1) {
-                                                    uriParts.dropLast(1).joinToString("/")
-                                                } else {
-                                                    "Unknown"
-                                                }
-                                            } catch (e: Exception) {
-                                                "Unknown"
-                                            }
-                                            val folderName = try {
-                                                val uriParts = filePath.split("/")
-                                                if (uriParts.size > 1) {
-                                                    val folderPart = uriParts[uriParts.size - 2]
-                                                    when {
-                                                        folderPart.contains("Download", ignoreCase = true) -> "Downloads"
-                                                        folderPart.contains("Document", ignoreCase = true) -> "Documents"
-                                                        else -> folderPart
+                                            // Extract folder info - use RELATIVE_PATH on Android 13+ (S23 Ultra) for better accuracy
+                                            val folderPath: String
+                                            val folderName: String
+                                            
+                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && relativePathColumn >= 0) {
+                                                // Android 13+ (S23 Ultra): Use RELATIVE_PATH column for accurate folder info
+                                                try {
+                                                    val relativePath = it.getString(relativePathColumn) ?: ""
+                                                    if (relativePath.isNotEmpty()) {
+                                                        folderPath = relativePath.trimEnd('/')
+                                                        folderName = when {
+                                                            relativePath.contains("Download", ignoreCase = true) -> "Downloads"
+                                                            relativePath.contains("Document", ignoreCase = true) -> "Documents"
+                                                            else -> {
+                                                                val parts = relativePath.split("/")
+                                                                parts.lastOrNull()?.takeIf { it.isNotEmpty() } ?: "Unknown"
+                                                            }
+                                                        }
+                                                    } else {
+                                                        folderPath = "Unknown"
+                                                        folderName = "Unknown"
                                                     }
-                                                } else {
+                                                } catch (e: Exception) {
+                                                    android.util.Log.w("PDFScan", "Error reading RELATIVE_PATH, falling back", e)
+                                                    folderPath = "Unknown"
+                                                    folderName = "Unknown"
+                                                }
+                                            } else {
+                                                // Fallback: Extract folder info from content URI
+                                                folderPath = try {
+                                                    val uriParts = filePath.split("/")
+                                                    if (uriParts.size > 1) {
+                                                        uriParts.dropLast(1).joinToString("/")
+                                                    } else {
+                                                        "Unknown"
+                                                    }
+                                                } catch (e: Exception) {
                                                     "Unknown"
                                                 }
-                                            } catch (e: Exception) {
-                                                "Unknown"
+                                                folderName = try {
+                                                    val uriParts = filePath.split("/")
+                                                    if (uriParts.size > 1) {
+                                                        val folderPart = uriParts[uriParts.size - 2]
+                                                        when {
+                                                            folderPart.contains("Download", ignoreCase = true) -> "Downloads"
+                                                            folderPart.contains("Document", ignoreCase = true) -> "Documents"
+                                                            else -> folderPart
+                                                        }
+                                                    } else {
+                                                        "Unknown"
+                                                    }
+                                                } catch (e: Exception) {
+                                                    "Unknown"
+                                                }
                                             }
                                             
                                             // Content URIs are always valid - add them

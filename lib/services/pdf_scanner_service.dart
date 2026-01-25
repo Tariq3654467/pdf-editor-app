@@ -57,12 +57,17 @@ class PDFScannerService {
           print('PDFScannerService: Starting automatic PDF scan...');
           final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs')
               .timeout(
-                const Duration(seconds: 120), // 2 minute timeout
+                const Duration(seconds: 90), // Reduced timeout for Samsung devices
                 onTimeout: () {
-                  print('PDFScannerService: Scan timeout after 120 seconds');
+                  print('PDFScannerService: Scan timeout after 90 seconds');
                   return <Map<String, dynamic>>[]; // Return empty on timeout
                 },
-              );
+              )
+              .catchError((error) {
+                print('PDFScannerService: Method channel error: $error');
+                // Return empty list on error to prevent crash
+                return <Map<String, dynamic>>[];
+              });
         
           if (result == null || result is! List) {
             print('PDFScannerService: Invalid scan result, falling back to app directory scan');

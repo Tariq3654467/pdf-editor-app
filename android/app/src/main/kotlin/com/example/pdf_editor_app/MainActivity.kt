@@ -308,6 +308,7 @@ class MainActivity : FlutterActivity() {
                         android.util.Log.d("PDFScan", "Querying MediaStore URI: $uri with selection: $selection")
                         val cursor: Cursor? = contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
                         
+                        var count = 0 // Declare count outside cursor?.use block so it's accessible later
                         cursor?.use {
                             try {
                                 android.util.Log.d("PDFScan", "MediaStore cursor returned ${it.count} rows")
@@ -359,7 +360,6 @@ class MainActivity : FlutterActivity() {
                                     }
                                 }
                                 
-                                var count = 0
                                 val maxResults = 10000 // Limit results to prevent memory issues on Samsung devices
                                 
                                 while (it.moveToNext() && count < maxResults) {
@@ -428,27 +428,26 @@ class MainActivity : FlutterActivity() {
                                             
                                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && relativePathColumn >= 0) {
                                                 // Android 13+ (S23 Ultra): Use RELATIVE_PATH column for accurate folder info
-                                                try {
+                                                val relativePathResult = try {
                                                     val relativePath = it.getString(relativePathColumn) ?: ""
                                                     if (relativePath.isNotEmpty()) {
-                                                        folderPath = relativePath.trimEnd('/')
-                                                        folderName = when {
+                                                        Pair(relativePath.trimEnd('/'), when {
                                                             relativePath.contains("Download", ignoreCase = true) -> "Downloads"
                                                             relativePath.contains("Document", ignoreCase = true) -> "Documents"
                                                             else -> {
                                                                 val parts = relativePath.split("/")
                                                                 parts.lastOrNull()?.takeIf { it.isNotEmpty() } ?: "Unknown"
                                                             }
-                                                        }
+                                                        })
                                                     } else {
-                                                        folderPath = "Unknown"
-                                                        folderName = "Unknown"
+                                                        Pair("Unknown", "Unknown")
                                                     }
                                                 } catch (e: Exception) {
                                                     android.util.Log.w("PDFScan", "Error reading RELATIVE_PATH, falling back", e)
-                                                    folderPath = "Unknown"
-                                                    folderName = "Unknown"
+                                                    Pair("Unknown", "Unknown")
                                                 }
+                                                folderPath = relativePathResult.first
+                                                folderName = relativePathResult.second
                                             } else {
                                                 // Fallback: Extract folder info from content URI
                                                 folderPath = try {

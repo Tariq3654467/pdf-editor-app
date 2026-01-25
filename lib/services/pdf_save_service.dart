@@ -104,8 +104,8 @@ class PDFSaveProgressDialog extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return WillPopScope(
-      onWillPop: () async => false, // Prevent dismissal
+    return PopScope(
+      canPop: false, // Prevent dismissal
       child: Dialog(
         backgroundColor: Colors.transparent,
         elevation: 0,

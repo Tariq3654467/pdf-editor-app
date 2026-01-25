@@ -36,30 +36,70 @@ class _SplashScreenState extends State<SplashScreen>
   @override
   void initState() {
     super.initState();
-    _animationController = AnimationController(
-      duration: const Duration(seconds: 3),
-      vsync: this,
-    );
+    try {
+      _animationController = AnimationController(
+        duration: const Duration(seconds: 3),
+        vsync: this,
+      );
 
-    _progressAnimation =
-        Tween<double>(begin: 0.0, end: 1.0).animate(_animationController);
+      _progressAnimation =
+          Tween<double>(begin: 0.0, end: 1.0).animate(_animationController);
 
-    _animationController.forward();
+      _animationController.forward();
 
-    Timer(const Duration(seconds: 3), () {
-      if (mounted) {
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (context) => const MyHomePage(title: 'PDF Editor'),
-          ),
-        );
-      }
-    });
+      Timer(const Duration(seconds: 3), () {
+        if (mounted) {
+          try {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) => const MyHomePage(title: 'PDF Editor'),
+              ),
+            );
+          } catch (e) {
+            print('Error navigating from splash: $e');
+            // Fallback: try again after a delay
+            Future.delayed(const Duration(seconds: 1), () {
+              if (mounted) {
+                try {
+                  Navigator.of(context).pushReplacement(
+                    MaterialPageRoute(
+                      builder: (context) => const MyHomePage(title: 'PDF Editor'),
+                    ),
+                  );
+                } catch (e2) {
+                  print('Error on retry navigation: $e2');
+                }
+              }
+            });
+          }
+        }
+      });
+    } catch (e) {
+      print('Error initializing splash screen: $e');
+      // If animation fails, still try to navigate after delay
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) {
+          try {
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (context) => const MyHomePage(title: 'PDF Editor'),
+              ),
+            );
+          } catch (e2) {
+            print('Error navigating after animation failure: $e2');
+          }
+        }
+      });
+    }
   }
 
   @override
   void dispose() {
-    _animationController.dispose();
+    try {
+      _animationController.dispose();
+    } catch (e) {
+      print('Error disposing animation controller: $e');
+    }
     super.dispose();
   }
 
@@ -332,17 +372,46 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    _checkAndRequestAccess();
-    _loadPDFs();
-    _loadToolsHistory();
-    
-    // Setup scroll listener for pagination
-    _scrollController.addListener(_onScroll);
+    try {
+      // Use post-frame callback to avoid crashes during initialization
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        try {
+          _checkAndRequestAccess();
+          _loadPDFs();
+          _loadToolsHistory();
+        } catch (e) {
+          print('Error in post-frame callback: $e');
+          // Still try to load PDFs even if other operations fail
+          try {
+            _loadPDFs();
+          } catch (e2) {
+            print('Error loading PDFs in fallback: $e2');
+          }
+        }
+      });
+      
+      // Setup scroll listener for pagination
+      _scrollController.addListener(_onScroll);
+    } catch (e) {
+      print('Error initializing MyHomePage: $e');
+      // Still try to load PDFs
+      Future.delayed(const Duration(milliseconds: 500), () {
+        try {
+          _loadPDFs();
+        } catch (e2) {
+          print('Error loading PDFs after init failure: $e2');
+        }
+      });
+    }
   }
   
   @override
   void dispose() {
-    _scrollController.dispose();
+    try {
+      _scrollController.dispose();
+    } catch (e) {
+      print('Error disposing scroll controller: $e');
+    }
     super.dispose();
   }
   

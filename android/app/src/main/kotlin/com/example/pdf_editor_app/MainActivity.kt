@@ -109,6 +109,7 @@ class MainActivity : FlutterActivity() {
         
         android.util.Log.d("PDFScan", "Starting PDF scan...")
         
+        // Add timeout protection - Samsung devices can hang on MediaStore queries
         try {
             // First, try SAF-accessible directories if we have access
             if (hasStorageAccess()) {
@@ -168,8 +169,16 @@ class MainActivity : FlutterActivity() {
                 android.util.Log.e("PDFScan", "Directory scan error", e)
                 e.printStackTrace()
             }
+        } catch (e: OutOfMemoryError) {
+            android.util.Log.e("PDFScan", "Out of memory during scan", e)
+            e.printStackTrace()
+            // Return what we have so far
+            android.util.Log.d("PDFScan", "Returning ${pdfList.size} PDFs before OOM")
         } catch (e: Exception) {
             android.util.Log.e("PDFScan", "General scan error", e)
+            e.printStackTrace()
+        } catch (e: Throwable) {
+            android.util.Log.e("PDFScan", "Unexpected error during scan", e)
             e.printStackTrace()
         }
         
@@ -270,27 +279,79 @@ class MainActivity : FlutterActivity() {
                         val cursor: Cursor? = contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
                         
                         cursor?.use {
-                            android.util.Log.d("PDFScan", "MediaStore cursor returned ${it.count} rows")
-                            val idColumn = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                            val nameColumn = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                            val sizeColumn = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-                            val dateColumn = it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
-                            
-                            // Try to get DATA column index (might not exist on Android 10+)
-                            var dataColumn = -1
                             try {
-                                dataColumn = it.getColumnIndex(MediaStore.Files.FileColumns.DATA)
-                            } catch (e: Exception) {
-                                // DATA column not available
-                            }
-                            
-                            var count = 0
-                            while (it.moveToNext()) {
+                                android.util.Log.d("PDFScan", "MediaStore cursor returned ${it.count} rows")
+                                
+                                // Add null safety checks for column indices
+                                val idColumn = try {
+                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("PDFScan", "ID column not found", e)
+                                    return@use
+                                }
+                                
+                                val nameColumn = try {
+                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("PDFScan", "Name column not found", e)
+                                    return@use
+                                }
+                                
+                                val sizeColumn = try {
+                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("PDFScan", "Size column not found", e)
+                                    return@use
+                                }
+                                
+                                val dateColumn = try {
+                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("PDFScan", "Date column not found", e)
+                                    return@use
+                                }
+                                
+                                // Try to get DATA column index (might not exist on Android 10+)
+                                var dataColumn = -1
                                 try {
-                                    val id = it.getLong(idColumn)
-                                    val name = it.getString(nameColumn) ?: "Unknown.pdf"
-                                    val size = it.getLong(sizeColumn)
-                                    val dateModified = it.getLong(dateColumn) * 1000 // Convert to milliseconds
+                                    dataColumn = it.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+                                } catch (e: Exception) {
+                                    // DATA column not available - this is normal on Android 10+
+                                }
+                                
+                                var count = 0
+                                val maxResults = 10000 // Limit results to prevent memory issues on Samsung devices
+                                
+                                while (it.moveToNext() && count < maxResults) {
+                                try {
+                                    // Add null safety checks for all cursor operations
+                                    val id = try {
+                                        it.getLong(idColumn)
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("PDFScan", "Error getting ID, skipping row", e)
+                                        continue
+                                    }
+                                    
+                                    val name = try {
+                                        it.getString(nameColumn) ?: "Unknown.pdf"
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("PDFScan", "Error getting name, using default", e)
+                                        "Unknown.pdf"
+                                    }
+                                    
+                                    val size = try {
+                                        it.getLong(sizeColumn)
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("PDFScan", "Error getting size, using 0", e)
+                                        0L
+                                    }
+                                    
+                                    val dateModified = try {
+                                        it.getLong(dateColumn) * 1000 // Convert to milliseconds
+                                    } catch (e: Exception) {
+                                        android.util.Log.w("PDFScan", "Error getting date, using current time", e)
+                                        System.currentTimeMillis()
+                                    }
                                     
                                     // Get file path - try DATA column first, fallback to content URI
                                     var filePath: String? = null
@@ -388,6 +449,10 @@ class MainActivity : FlutterActivity() {
                                 }
                             }
                             android.util.Log.d("PDFScan", "Added $count PDFs from URI: $uri with selection: $selection")
+                            } catch (e: Exception) {
+                                android.util.Log.e("PDFScan", "Error using cursor", e)
+                                e.printStackTrace()
+                            }
                             if (count > 0) {
                                 // If we found PDFs with this selection, don't try other selections for this URI
                                 foundPDFsForUri = true

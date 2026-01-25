@@ -169,6 +169,7 @@ static Future<PDFSaveResult> _savePDFWithAnnotationsIsolate(
 }
 
 /// Isolate function: Render PDF page to image
+/// Note: This is a placeholder - actual implementation depends on Syncfusion API
 static Future<Uint8List?> _renderPageToImageIsolate(
   PDFPageRenderRequest request,
 ) async {
@@ -184,15 +185,13 @@ static Future<Uint8List?> _renderPageToImageIsolate(
       return null;
     }
 
-    final page = document.pages[request.pageIndex];
-    
-    // Render page to image at specified resolution
-    final image = await page.extractImages();
+    // TODO: Implement actual page rendering to image
+    // Syncfusion PDF viewer handles rendering internally
+    // For caching, consider using the viewer's rendered output
+    // This function is a placeholder for future implementation
     
     document.dispose();
-    
-    // Convert to Uint8List (simplified - actual implementation may vary)
-    return image?.firstOrNull;
+    return null;
   } catch (e) {
     return null;
   }

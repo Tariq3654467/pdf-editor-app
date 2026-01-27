@@ -83,12 +83,30 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_SCAN_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanPDFs" -> {
-                    try {
-                        val pdfList = scanAllPDFs()
-                        result.success(pdfList)
-                    } catch (e: Exception) {
-                        result.error("SCAN_ERROR", "Failed to scan PDFs: ${e.message}", null)
-                    }
+                    // CRITICAL: Run heavy scan on background thread to avoid ANR
+                    // Samsung devices (S23 Ultra etc.) are very sensitive to long operations
+                    Thread {
+                        try {
+                            val pdfList = scanAllPDFs()
+                            // Post result back on main thread
+                            runOnUiThread {
+                                try {
+                                    result.success(pdfList)
+                                } catch (e: Exception) {
+                                    android.util.Log.e("PDFScan", "Error delivering scan result", e)
+                                }
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("PDFScan", "Scan error", e)
+                            runOnUiThread {
+                                try {
+                                    result.error("SCAN_ERROR", "Failed to scan PDFs: ${e.message}", null)
+                                } catch (inner: Exception) {
+                                    android.util.Log.e("PDFScan", "Error delivering scan error", inner)
+                                }
+                            }
+                        }
+                    }.start()
                 }
                 "requestStorageAccess" -> {
                     pendingResult = result

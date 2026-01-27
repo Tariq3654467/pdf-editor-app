@@ -369,6 +369,11 @@ class _MyHomePageState extends State<MyHomePage> {
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
 
+  // Feature flag: turn OFF automatic device-wide PDF scanning + permission dialog
+  // For now we disable it to avoid any chance of ANR / crashes on some devices.
+  // PDFs can still be added manually and scan can be triggered via the \"Retry Scan\" button.
+  static const bool _enableAutomaticDeviceScan = false;
+
   @override
   void initState() {
     super.initState();
@@ -376,26 +381,15 @@ class _MyHomePageState extends State<MyHomePage> {
     // Setup scroll listener for pagination
     _scrollController.addListener(_onScroll);
     
-    // CRITICAL FIX: Delay all initialization to prevent crashes on Samsung devices
-    // The widget needs to be fully built before starting any async operations
+    // Delay initialization slightly to ensure widget is built
     Future.delayed(const Duration(milliseconds: 300), () {
       if (!mounted) return;
       
       try {
-        // Load cached PDFs first (instant, no blocking)
+        // 1) Load cached PDFs only (no automatic device scan)
         _loadCachedPDFsFirst();
-        
-        // Then check permissions and scan in background
-        Future.delayed(const Duration(milliseconds: 200), () {
-          if (!mounted) return;
-          try {
-            _checkAndRequestAccess();
-          } catch (e) {
-            print('Error checking access: $e');
-          }
-        });
-        
-        // Load tools history separately (non-blocking)
+
+        // 2) Load tools history separately (non-blocking)
         Future.delayed(const Duration(milliseconds: 100), () {
           if (!mounted) return;
           _loadToolsHistory().catchError((e) {
@@ -428,20 +422,11 @@ class _MyHomePageState extends State<MyHomePage> {
       if (mounted) {
         setState(() {
           pdfFiles = cachedPDFs;
-          _isLoading = cachedPDFs.isEmpty; // Only show loading if no cache
+          // We are disabling automatic device-wide scanning for now,
+          // so there is no long-running loading operation here.
+          // If there is no cache, simply show the empty state.
+          _isLoading = false;
         });
-        
-        // If we have cache, trigger background refresh
-        if (cachedPDFs.isNotEmpty) {
-          _scanInBackground();
-        } else {
-          // No cache - start scan after a delay
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) {
-              _scanInBackground();
-            }
-          });
-        }
       }
     } catch (e, stackTrace) {
       print('Error in _loadCachedPDFsFirst: $e');
@@ -513,6 +498,14 @@ class _MyHomePageState extends State<MyHomePage> {
   }
   
   Future<void> _checkAndRequestAccess() async {
+    // Automatic device scan + permission dialog is disabled via feature flag.
+    // This prevents any surprise dialogs or scans on startup which might
+    // contribute to hangs/crashes on some devices. User can still trigger
+    // scanning manually via the \"Retry Scan\" button.
+    if (!_enableAutomaticDeviceScan) {
+      return;
+    }
+
     if (!kIsWeb && io.Platform.isAndroid) {
       // Check if dialog has already been shown
       final dialogShown = await PDFPreferencesService.hasPermissionDialogBeenShown();

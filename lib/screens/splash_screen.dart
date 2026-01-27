@@ -372,36 +372,85 @@ class _MyHomePageState extends State<MyHomePage> {
   @override
   void initState() {
     super.initState();
-    try {
-      // Use post-frame callback to avoid crashes during initialization
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        try {
-          _checkAndRequestAccess();
-          _loadPDFs();
-          _loadToolsHistory();
-        } catch (e) {
-          print('Error in post-frame callback: $e');
-          // Still try to load PDFs even if other operations fail
-          try {
-            _loadPDFs();
-          } catch (e2) {
-            print('Error loading PDFs in fallback: $e2');
-          }
-        }
-      });
+    
+    // Setup scroll listener for pagination
+    _scrollController.addListener(_onScroll);
+    
+    // CRITICAL FIX: Delay all initialization to prevent crashes on Samsung devices
+    // The widget needs to be fully built before starting any async operations
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (!mounted) return;
       
-      // Setup scroll listener for pagination
-      _scrollController.addListener(_onScroll);
-    } catch (e) {
-      print('Error initializing MyHomePage: $e');
-      // Still try to load PDFs
-      Future.delayed(const Duration(milliseconds: 500), () {
-        try {
-          _loadPDFs();
-        } catch (e2) {
-          print('Error loading PDFs after init failure: $e2');
+      try {
+        // Load cached PDFs first (instant, no blocking)
+        _loadCachedPDFsFirst();
+        
+        // Then check permissions and scan in background
+        Future.delayed(const Duration(milliseconds: 200), () {
+          if (!mounted) return;
+          try {
+            _checkAndRequestAccess();
+          } catch (e) {
+            print('Error checking access: $e');
+          }
+        });
+        
+        // Load tools history separately (non-blocking)
+        Future.delayed(const Duration(milliseconds: 100), () {
+          if (!mounted) return;
+          _loadToolsHistory().catchError((e) {
+            print('Error loading tools history: $e');
+          });
+        });
+      } catch (e, stackTrace) {
+        print('Error in delayed init: $e');
+        print('Stack trace: $stackTrace');
+      }
+    });
+  }
+  
+  /// Load cached PDFs immediately without any scanning
+  /// This ensures UI shows something instantly, preventing perceived crash
+  Future<void> _loadCachedPDFsFirst() async {
+    if (!mounted) return;
+    
+    try {
+      final cachedPDFs = await PDFCacheService.loadPDFList()
+          .timeout(
+            const Duration(seconds: 2),
+            onTimeout: () => <PDFFile>[],
+          )
+          .catchError((e) {
+            print('Error loading cache: $e');
+            return <PDFFile>[];
+          });
+      
+      if (mounted) {
+        setState(() {
+          pdfFiles = cachedPDFs;
+          _isLoading = cachedPDFs.isEmpty; // Only show loading if no cache
+        });
+        
+        // If we have cache, trigger background refresh
+        if (cachedPDFs.isNotEmpty) {
+          _scanInBackground();
+        } else {
+          // No cache - start scan after a delay
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted) {
+              _scanInBackground();
+            }
+          });
         }
-      });
+      }
+    } catch (e, stackTrace) {
+      print('Error in _loadCachedPDFsFirst: $e');
+      print('Stack trace: $stackTrace');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
   
@@ -587,60 +636,91 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 
   Future<void> _loadPDFs({bool forceRescan = false}) async {
-    // Show loading only if we don't have cached data
-    final cachedPDFs = await PDFCacheService.loadPDFList();
-    if (cachedPDFs.isEmpty || forceRescan) {
-      setState(() {
-        _isLoading = true;
-      });
-    }
-
+    // CRITICAL: Add delay to ensure widget is fully mounted before scanning
+    // This prevents crashes on Samsung devices during rapid initialization
+    await Future.delayed(const Duration(milliseconds: 100));
+    
+    if (!mounted) return; // Safety check
+    
     try {
-      // Load from cache first (instant), then scan in background if needed
-      final loadedPDFs = await PDFScannerService.loadPDFs(forceRescan: forceRescan);
+      // Load from cache first (instant) - this never blocks
+      final cachedPDFs = await PDFCacheService.loadPDFList().catchError((e) {
+        print('Error loading cache: $e');
+        return <PDFFile>[];
+      });
       
-      // Update UI immediately with cached/initial results
+      // Update UI immediately with cached results (if any)
       if (mounted) {
         setState(() {
-          pdfFiles = loadedPDFs;
-          _isLoading = false;
+          pdfFiles = cachedPDFs;
+          _isLoading = cachedPDFs.isEmpty || forceRescan;
         });
       }
       
-      // If we need to scan (no cache or force rescan), do it in background
-      if (loadedPDFs.isEmpty || forceRescan) {
-        // Scan in background and update UI when done
-        PDFScannerService.scanAllPDFsInBackground().then((scannedPDFs) {
-          if (mounted && scannedPDFs.isNotEmpty) {
-            setState(() {
-              pdfFiles = scannedPDFs;
-              _isLoading = false;
-            });
-          } else if (mounted) {
-            setState(() {
-              _isLoading = false;
-            });
-          }
-        }).catchError((e) {
-          print('Error in background scan: $e');
-          if (mounted) {
-            setState(() {
-              _isLoading = false;
-            });
-          }
-        });
+      // If we have cache and not forcing rescan, return early
+      if (cachedPDFs.isNotEmpty && !forceRescan) {
+        // Trigger background refresh without blocking
+        _scanInBackground();
+        return;
       }
       
-      // Also reload history when PDFs are loaded
-      await _loadToolsHistory();
-    } catch (e) {
-      print('Error loading PDFs: $e');
+      // No cache or force rescan - scan in background (non-blocking)
+      _scanInBackground();
+      
+    } catch (e, stackTrace) {
+      print('Error in _loadPDFs: $e');
+      print('Stack trace: $stackTrace');
       if (mounted) {
         setState(() {
           _isLoading = false;
         });
       }
     }
+  }
+  
+  /// Scan PDFs in background without blocking UI thread
+  /// This is critical for preventing ANR on Samsung devices
+  void _scanInBackground() {
+    // Use Future.microtask to ensure this runs after current frame
+    Future.microtask(() async {
+      try {
+        // Scan in background - this should never block
+        final scannedPDFs = await PDFScannerService.scanAllPDFsInBackground()
+            .timeout(
+              const Duration(seconds: 120), // Max 2 minutes
+              onTimeout: () {
+                print('PDF scan timeout - returning empty list');
+                return <PDFFile>[];
+              },
+            )
+            .catchError((e, stackTrace) {
+              print('Error in background scan: $e');
+              print('Stack trace: $stackTrace');
+              return <PDFFile>[];
+            });
+        
+        // Update UI only if widget is still mounted
+        if (mounted) {
+          setState(() {
+            pdfFiles = scannedPDFs;
+            _isLoading = false;
+          });
+          
+          // Reload history after scan completes
+          _loadToolsHistory().catchError((e) {
+            print('Error loading tools history: $e');
+          });
+        }
+      } catch (e, stackTrace) {
+        print('Unexpected error in _scanInBackground: $e');
+        print('Stack trace: $stackTrace');
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
+      }
+    });
   }
 
   List<PDFFile> _getFilteredPDFs() {
@@ -1212,80 +1292,116 @@ class _MyHomePageState extends State<MyHomePage> {
     final filteredPDFs = _getFilteredPDFs();
     
     if (filteredPDFs.isEmpty) {
-      String emptyMessage;
-      String emptyTitle;
-      
-      switch (_selectedTabIndex) {
-        case 1:
-          emptyTitle = 'No Recent Files';
-          emptyMessage = 'Files you open will appear here';
-          break;
-        case 2:
-          emptyTitle = 'No Bookmarks';
-          emptyMessage = 'Tap the star icon to bookmark a file';
-          break;
-        default:
-          emptyTitle = 'No PDFs found';
-          emptyMessage = 'PDFs on your device couldn\'t be automatically loaded.\n\nThis may be due to Android storage restrictions.\n\nTap "Add PDF" to manually select PDF files.';
-      }
-      
-      return Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.description_outlined,
-                size: 64,
-                color: Color(0xFFBDBDBD),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                emptyTitle,
-                style: const TextStyle(
-                  color: Color(0xFF9E9E9E),
-                  fontSize: 16,
-                  fontWeight: FontWeight.w500,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                emptyMessage,
-                style: const TextStyle(
-                  color: Color(0xFF9E9E9E),
-                  fontSize: 14,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              if (_selectedTabIndex == 0) ...[
-                const SizedBox(height: 24),
-                ElevatedButton.icon(
-                  onPressed: _pickAndAddPDF,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFE53935),
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+      // CRITICAL: Wrap empty state in RepaintBoundary and error boundary
+      // This prevents crashes when rendering empty state on Samsung devices
+      return RepaintBoundary(
+        child: Builder(
+          builder: (context) {
+            try {
+              String emptyMessage;
+              String emptyTitle;
+              
+              switch (_selectedTabIndex) {
+                case 1:
+                  emptyTitle = 'No Recent Files';
+                  emptyMessage = 'Files you open will appear here';
+                  break;
+                case 2:
+                  emptyTitle = 'No Bookmarks';
+                  emptyMessage = 'Tap the star icon to bookmark a file';
+                  break;
+                default:
+                  emptyTitle = 'No PDFs found';
+                  emptyMessage = 'PDFs on your device couldn\'t be automatically loaded.\n\nThis may be due to Android storage restrictions.\n\nTap "Add PDF" to manually select PDF files.';
+              }
+              
+              return Center(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(
+                        Icons.description_outlined,
+                        size: 64,
+                        color: Color(0xFFBDBDBD),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        emptyTitle,
+                        style: const TextStyle(
+                          color: Color(0xFF9E9E9E),
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        emptyMessage,
+                        style: const TextStyle(
+                          color: Color(0xFF9E9E9E),
+                          fontSize: 14,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      if (_selectedTabIndex == 0) ...[
+                        const SizedBox(height: 24),
+                        ElevatedButton.icon(
+                          onPressed: () {
+                            try {
+                              _pickAndAddPDF();
+                            } catch (e) {
+                              print('Error in _pickAndAddPDF: $e');
+                            }
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE53935),
+                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                          ),
+                          icon: const Icon(Icons.add, color: Colors.white),
+                          label: Text(
+                            (kIsWeb || io.Platform.isIOS) ? 'Import PDF' : 'Add PDF',
+                            style: const TextStyle(color: Colors.white, fontSize: 16),
+                          ),
+                        ),
+                        if (!kIsWeb && !io.Platform.isIOS) ...[
+                          const SizedBox(height: 12),
+                          TextButton(
+                            onPressed: () {
+                              try {
+                                _scanInBackground();
+                              } catch (e) {
+                                print('Error in retry scan: $e');
+                              }
+                            },
+                            child: const Text(
+                              'Retry Scan',
+                              style: TextStyle(color: Color(0xFFE53935)),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ],
                   ),
-                  icon: const Icon(Icons.add, color: Colors.white),
-                  label: Text(
-                    (kIsWeb || io.Platform.isIOS) ? 'Import PDF' : 'Add PDF',
-                    style: const TextStyle(color: Colors.white, fontSize: 16),
+                ),
+              );
+            } catch (e, stackTrace) {
+              // Fallback UI if empty state rendering fails
+              print('Error rendering empty state: $e');
+              print('Stack trace: $stackTrace');
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24.0),
+                  child: Text(
+                    'No PDFs found. Tap "Add PDF" to import files.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Color(0xFF9E9E9E)),
                   ),
                 ),
-                if (!kIsWeb && !io.Platform.isIOS) ...[
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: () => _loadPDFs(forceRescan: true),
-                    child: const Text(
-                      'Retry Scan',
-                      style: TextStyle(color: Color(0xFFE53935)),
-                    ),
-                  ),
-                ],
-              ],
-            ],
-          ),
+              );
+            }
+          },
         ),
       );
     }

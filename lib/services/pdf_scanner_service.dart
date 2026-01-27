@@ -613,6 +613,7 @@ class PDFScannerService {
   
   /// Scan PDFs in background (non-blocking)
   /// Returns a Future that completes when scan is done (for UI updates)
+  /// CRITICAL: Comprehensive error handling to prevent crashes on Samsung devices
   static Future<List<PDFFile>> scanAllPDFsInBackground() async {
     if (_isScanning) {
       print('PDFScannerService: Scan already in progress, skipping...');
@@ -621,13 +622,30 @@ class PDFScannerService {
     
     _isScanning = true;
     try {
-      // Run scan in background
-      final result = await scanAllPDFs();
+      // Add delay to ensure UI thread is free before starting heavy operation
+      await Future.delayed(const Duration(milliseconds: 200));
+      
+      // Run scan in background with timeout and comprehensive error handling
+      final result = await scanAllPDFs(saveToCache: true)
+          .timeout(
+            const Duration(seconds: 120), // Max 2 minutes
+            onTimeout: () {
+              print('PDFScannerService: Background scan timeout after 120 seconds');
+              return <PDFFile>[];
+            },
+          )
+          .catchError((e, stackTrace) {
+            print('PDFScannerService: Background scan error: $e');
+            print('Stack trace: $stackTrace');
+            return <PDFFile>[]; // Return empty list instead of crashing
+          });
+      
       print('PDFScannerService: Background scan completed with ${result.length} PDFs');
       return result;
-    } catch (e) {
-      print('PDFScannerService: Background scan error: $e');
-      return [];
+    } catch (e, stackTrace) {
+      print('PDFScannerService: Unexpected error in scanAllPDFsInBackground: $e');
+      print('Stack trace: $stackTrace');
+      return <PDFFile>[]; // Always return empty list, never crash
     } finally {
       _isScanning = false;
     }

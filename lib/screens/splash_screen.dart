@@ -107,8 +107,11 @@ class _SplashScreenState extends State<SplashScreen>
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFF121212) : Colors.white;
+    
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: backgroundColor,
       body: Stack(
         children: [
           // Top Left - Large light pink circle (partially visible)
@@ -1140,9 +1143,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           // Content with rounded top corners
           Expanded(
             child: Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.only(
+              decoration: BoxDecoration(
+                color: Theme.of(context).scaffoldBackgroundColor,
+                borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(20),
                   topRight: Radius.circular(20),
                 ),
@@ -1164,17 +1167,17 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         // Bottom Navigation
         bottomNavigationBar: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).scaffoldBackgroundColor,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.1),
+              color: Colors.black.withOpacity(isDarkMode ? 0.3 : 0.1),
               blurRadius: 10,
               offset: const Offset(0, -5),
             ),
           ],
         ),
         child: BottomAppBar(
-          color: Colors.white,
+          color: Theme.of(context).scaffoldBackgroundColor,
           shape: const CircularNotchedRectangle(),
           notchMargin: 8.0,
           child: SizedBox(
@@ -1362,8 +1365,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   }
 
   Widget _buildHomeContent() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     return Container(
-      color: Colors.white,
+      color: Theme.of(context).scaffoldBackgroundColor,
       child: Column(
         children: [
         // Tabs
@@ -1601,9 +1605,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: Colors.grey[50],
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.5),
+              ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1786,24 +1792,26 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           return Container(
             margin: const EdgeInsets.only(bottom: 16),
             decoration: BoxDecoration(
-              color: Colors.white,
+              color: Theme.of(context).cardColor,
               borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: Colors.grey[200]!),
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.5),
+              ),
             ),
             child: ExpansionTile(
               leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
               title: Text(
                 folder.folderName,
-                style: const TextStyle(
-                  color: Color(0xFF263238),
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.titleLarge?.color,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
               ),
               subtitle: Text(
                 '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
-                style: const TextStyle(
-                  color: Color(0xFF9E9E9E),
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodySmall?.color,
                   fontSize: 12,
                 ),
               ),
@@ -1995,13 +2003,15 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   }
 
   void _showPDFOptionsMenu(BuildContext context, PDFFile pdf) {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.transparent,
       builder: (context) => Container(
-        decoration: const BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.only(
+        decoration: BoxDecoration(
+          color: Theme.of(context).bottomSheetTheme.backgroundColor ?? 
+                 Theme.of(context).scaffoldBackgroundColor,
+          borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(20),
             topRight: Radius.circular(20),
           ),
@@ -2215,8 +2225,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 final newPath = path.join(directory, newFileName);
 
                 // Check if file with new name already exists
-                final newFile = io.File(newPath);
-                if (await newFile.exists() && newPath != pdf.filePath) {
+                final targetFile = io.File(newPath);
+                if (await targetFile.exists() && newPath != pdf.filePath) {
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
@@ -2233,8 +2243,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 await PDFCacheService.removePDFFromCache(pdf.filePath!);
                 
                 // Create new PDFFile object with updated path
-                final newFile = io.File(newPath);
-                final stat = await newFile.stat();
+                final renamedFile = io.File(newPath);
+                final stat = await renamedFile.stat();
                 final updatedPDF = PDFFile(
                   name: path.basename(newPath),
                   date: PDFService.formatDate(stat.modified),

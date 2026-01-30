@@ -250,12 +250,12 @@ class _SplashScreenState extends State<SplashScreen>
                 ),
                 const SizedBox(height: 30),
                 // App Title
-                const Text(
+                Text(
                   'PDF Reader',
                   style: TextStyle(
                     fontSize: 28,
                     fontWeight: FontWeight.w600,
-                    color: Color(0xFF263238),
+                    color: Theme.of(context).textTheme.headlineMedium?.color,
                     letterSpacing: 0.5,
                   ),
                 ),
@@ -1170,7 +1170,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           color: Theme.of(context).scaffoldBackgroundColor,
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(isDarkMode ? 0.3 : 0.1),
+              color: Colors.black.withOpacity(
+                Theme.of(context).brightness == Brightness.dark ? 0.3 : 0.1,
+              ),
               blurRadius: 10,
               offset: const Offset(0, -5),
             ),
@@ -1200,7 +1202,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                             Icons.home,
                             color: _selectedBottomNavIndex == 0
                                 ? const Color(0xFFE53935) // Reddish-pink when active
-                                : const Color(0xFFBDBDBD),
+                                : Theme.of(context).iconTheme.color?.withOpacity(0.6) ?? Colors.grey,
                             size: 24,
                           ),
                           const SizedBox(height: 2),
@@ -1209,7 +1211,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                             style: TextStyle(
                               color: _selectedBottomNavIndex == 0
                                   ? const Color(0xFFE53935) // Reddish-pink when active
-                                  : const Color(0xFFBDBDBD),
+                                  : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.6) ?? Colors.grey,
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -1239,7 +1241,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                             style: TextStyle(
                               color: _selectedBottomNavIndex == 1
                                   ? const Color(0xFFE53935)
-                                  : const Color(0xFF9E9E9E), // Light grey when inactive
+                                  : Theme.of(context).textTheme.bodySmall?.color?.withOpacity(0.6) ?? Colors.grey,
                               fontSize: 11,
                               fontWeight: FontWeight.w500,
                             ),
@@ -1271,8 +1273,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   }
 
   Widget _buildToolsIcon({required bool isActive}) {
-    final color = isActive ? const Color(0xFFE53935) : const Color(0xFFBDBDBD);
-    final plusColor = isActive ? const Color(0xFFE53935) : const Color(0xFFBDBDBD);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final inactiveColor = isDarkMode 
+        ? Colors.grey[400] 
+        : const Color(0xFFBDBDBD);
+    final color = isActive ? const Color(0xFFE53935) : inactiveColor;
+    final plusColor = isActive ? const Color(0xFFE53935) : inactiveColor;
     return SizedBox(
       width: 24,
       height: 24,
@@ -1354,8 +1360,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         child: Text(
           label,
           style: TextStyle(
-            color:
-                isActive ? const Color(0xFFE53935) : const Color(0xFFBDBDBD),
+            color: isActive
+                ? const Color(0xFFE53935)
+                : Theme.of(context).textTheme.bodyMedium?.color,
             fontSize: 14,
             fontWeight: isActive ? FontWeight.w600 : FontWeight.w400,
           ),
@@ -1855,16 +1862,16 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
           title: Text(
             folder.folderName,
-            style: const TextStyle(
-              color: Color(0xFF263238),
+            style: TextStyle(
+              color: Theme.of(context).textTheme.titleLarge?.color,
               fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
           ),
           subtitle: Text(
             '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
-            style: const TextStyle(
-              color: Color(0xFF9E9E9E),
+            style: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color,
               fontSize: 12,
             ),
           ),

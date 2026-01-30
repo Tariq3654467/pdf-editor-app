@@ -1406,7 +1406,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 child: Text(
                   '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
                   style: TextStyle(
-                    color: Theme.of(context).textTheme.titleLarge?.color,
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white
+                        : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -1810,7 +1812,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               title: Text(
                 folder.folderName,
                 style: TextStyle(
-                  color: Theme.of(context).textTheme.titleLarge?.color,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white
+                      : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
                   fontSize: 16,
                   fontWeight: FontWeight.w600,
                 ),
@@ -1818,7 +1822,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               subtitle: Text(
                 '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
                 style: TextStyle(
-                  color: Theme.of(context).textTheme.bodySmall?.color,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white70
+                      : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
                   fontSize: 12,
                 ),
               ),
@@ -1863,7 +1869,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           title: Text(
             folder.folderName,
             style: TextStyle(
-              color: Theme.of(context).textTheme.titleLarge?.color,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white
+                  : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
               fontSize: 16,
               fontWeight: FontWeight.w600,
             ),
@@ -1871,7 +1879,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           subtitle: Text(
             '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
             style: TextStyle(
-              color: Theme.of(context).textTheme.bodySmall?.color,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white70
+                  : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
               fontSize: 12,
             ),
           ),

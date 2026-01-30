@@ -192,8 +192,10 @@ class _ToolsScreenState extends State<ToolsScreen> {
             Text(
               title,
               textAlign: TextAlign.center,
-              style: const TextStyle(
-                color: Color(0xFF263238),
+              style: TextStyle(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : const Color(0xFF263238),
                 fontSize: 14,
                 fontWeight: FontWeight.w600,
               ),

@@ -1275,7 +1275,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   Widget _buildToolsIcon({required bool isActive}) {
     final isDarkMode = Theme.of(context).brightness == Brightness.dark;
     final inactiveColor = isDarkMode 
-        ? Colors.grey[400] 
+        ? (Colors.grey[400] ?? Colors.grey) 
         : const Color(0xFFBDBDBD);
     final color = isActive ? const Color(0xFFE53935) : inactiveColor;
     final plusColor = isActive ? const Color(0xFFE53935) : inactiveColor;
@@ -1954,7 +1954,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
-              color: Theme.of(context).textTheme.titleMedium?.color,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white
+                  : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
               fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
@@ -1964,7 +1966,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 ? '${pdf.date} • ${pdf.size}'
                 : '${pdf.folderName ?? "Unknown"} • ${pdf.date} • ${pdf.size}',
             style: TextStyle(
-              color: Theme.of(context).textTheme.bodySmall?.color,
+              color: Theme.of(context).brightness == Brightness.dark
+                  ? Colors.white70
+                  : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
               fontSize: 12,
             ),
           ),
@@ -1999,8 +2003,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               ),
               IconButton(
                 onPressed: () => _showPDFOptionsMenu(context, pdf),
-                icon: const Icon(Icons.more_vert,
-                    color: Color(0xFFBDBDBD), size: 20),
+                icon: Icon(
+                  Icons.more_vert,
+                  color: Theme.of(context).iconTheme.color?.withOpacity(0.7) ?? Colors.grey,
+                  size: 20,
+                ),
               ),
             ],
           ),

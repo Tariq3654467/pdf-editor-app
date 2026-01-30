@@ -400,23 +400,40 @@ class _ToolsScreenState extends State<ToolsScreen> {
           );
         }
       } else {
+        // PHASE 5: User-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to split PDF. The PDF may be too large.'),
-              duration: Duration(seconds: 2),
+              content: Text('Failed to split PDF. The PDF may be too large or corrupted. Please try with a smaller PDF.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
       }
     } catch (e) {
-      // Close loading dialog on error
+      // PHASE 5: Close loading dialog on error and show user-friendly message
       if (mounted && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
       }
       if (mounted) {
+        final errorMessage = e.toString().contains('timeout')
+            ? 'Operation timed out. The PDF may be too large. Please try with a smaller PDF.'
+            : e.toString().contains('permission')
+                ? 'Permission denied. Please grant storage access in settings.'
+                : 'An error occurred while splitting the PDF. Please try again.';
+        
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _splitPDF(),
+            ),
+          ),
         );
       }
     } finally {
@@ -491,19 +508,37 @@ class _ToolsScreenState extends State<ToolsScreen> {
           }
         }
       } else {
+        // PHASE 5: User-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to merge PDFs. Please try again.'),
-              duration: Duration(seconds: 2),
+              content: Text('Failed to merge PDFs. One or more PDFs may be corrupted or too large.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
       }
     } catch (e) {
+      // PHASE 5: User-friendly error with retry
       if (mounted) {
+        final errorMessage = e.toString().contains('timeout')
+            ? 'Merge operation timed out. The PDFs may be too large. Please try with smaller PDFs.'
+            : e.toString().contains('permission')
+                ? 'Permission denied. Please grant storage access in settings.'
+                : 'An error occurred while merging PDFs. Please try again.';
+        
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _mergePDF(),
+            ),
+          ),
         );
       }
     } finally {
@@ -598,23 +633,40 @@ class _ToolsScreenState extends State<ToolsScreen> {
           );
         }
       } else {
+        // PHASE 5: User-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to compress PDF. Please try again.'),
-              duration: Duration(seconds: 2),
+              content: Text('Failed to compress PDF. The PDF may be corrupted or already compressed.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
       }
     } catch (e) {
-      // Close loading dialog on error
+      // PHASE 5: Close loading dialog on error and show user-friendly message
       if (mounted && Navigator.canPop(context)) {
         Navigator.pop(context);
       }
       if (mounted) {
+        final errorMessage = e.toString().contains('timeout')
+            ? 'Compression timed out. The PDF may be too large. Please try with a smaller PDF.'
+            : e.toString().contains('permission')
+                ? 'Permission denied. Please grant storage access in settings.'
+                : 'An error occurred while compressing the PDF. Please try again.';
+        
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
+            action: SnackBarAction(
+              label: 'Retry',
+              textColor: Colors.white,
+              onPressed: () => _compressPDF(),
+            ),
+          ),
         );
       }
     } finally {

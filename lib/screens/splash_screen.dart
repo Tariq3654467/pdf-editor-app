@@ -1876,9 +1876,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       return Container(
         margin: const EdgeInsets.only(bottom: 16),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.grey[200]!),
+          border: Border.all(
+            color: Theme.of(context).dividerColor.withOpacity(0.5),
+          ),
         ),
         child: ExpansionTile(
           leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
@@ -1952,7 +1954,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       child: Container(
         margin: const EdgeInsets.only(bottom: 12),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Colors.white, // Keep cards white for better visibility
           borderRadius: BorderRadius.circular(12),
         ),
         child: ListTile(
@@ -1979,10 +1981,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             pdf.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Colors.white
-                  : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
+            style: const TextStyle(
+              color: Color(0xFF263238), // Dark text for visibility on white cards
               fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
@@ -1991,10 +1991,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             isNested 
                 ? '${pdf.date} • ${pdf.size}'
                 : '${pdf.folderName ?? "Unknown"} • ${pdf.date} • ${pdf.size}',
-            style: TextStyle(
-              color: Theme.of(context).brightness == Brightness.dark
-                  ? Colors.white70
-                  : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
+            style: const TextStyle(
+              color: Color(0xFF9E9E9E), // Grey text for metadata on white cards
               fontSize: 12,
             ),
           ),

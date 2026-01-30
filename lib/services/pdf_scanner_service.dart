@@ -53,13 +53,14 @@ class PDFScannerService {
       
       if (!kIsWeb && io.Platform.isAndroid) {
         try {
-          // Call native method to scan PDFs with timeout (native code handles async operations)
+          // PHASE 4: Call native method to scan PDFs with increased timeout for 400+ PDFs
           print('PDFScannerService: Starting automatic PDF scan...');
           final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs')
               .timeout(
-                const Duration(seconds: 90), // Reduced timeout for Samsung devices
+                const Duration(minutes: 5), // PHASE 4: Increased timeout for large storage
                 onTimeout: () {
-                  print('PDFScannerService: Scan timeout after 90 seconds');
+                  print('PDFScannerService: Scan timeout after 5 minutes');
+                  print('PDFScannerService: This may indicate very large storage (>400 PDFs)');
                   return <Map<String, dynamic>>[]; // Return empty on timeout
                 },
               )
@@ -612,6 +613,7 @@ class PDFScannerService {
   }
   
   /// Scan PDFs in background (non-blocking)
+  /// PHASE 4: Improved with better timeout and error handling for 400+ PDFs
   /// Returns a Future that completes when scan is done (for UI updates)
   /// CRITICAL: Comprehensive error handling to prevent crashes on Samsung devices
   static Future<List<PDFFile>> scanAllPDFsInBackground() async {
@@ -622,15 +624,16 @@ class PDFScannerService {
     
     _isScanning = true;
     try {
-      // Add delay to ensure UI thread is free before starting heavy operation
+      // PHASE 4: Add delay to ensure UI thread is free before starting heavy operation
       await Future.delayed(const Duration(milliseconds: 200));
       
-      // Run scan in background with timeout and comprehensive error handling
+      // PHASE 4: Increased timeout for large storage (400+ PDFs) - 5 minutes
       final result = await scanAllPDFs(saveToCache: true)
           .timeout(
-            const Duration(seconds: 120), // Max 2 minutes
+            const Duration(minutes: 5), // Increased from 2 minutes for large storage
             onTimeout: () {
-              print('PDFScannerService: Background scan timeout after 120 seconds');
+              print('PDFScannerService: Background scan timeout after 5 minutes');
+              print('PDFScannerService: This may indicate very large storage (>400 PDFs)');
               return <PDFFile>[];
             },
           )

@@ -1542,25 +1542,34 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           Navigator.of(context).pop(true); // Return true to indicate refresh needed
         }
       } else {
+        // PHASE 5: User-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to merge PDFs. Please try again.'),
-              duration: Duration(seconds: 2),
+              content: Text('Failed to merge PDFs. One or more PDFs may be corrupted or too large.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
       }
     } catch (e) {
-      // Close loading dialog on error
+      // PHASE 5: Close loading dialog on error and show user-friendly message
       if (mounted) {
         if (Navigator.canPop(context)) {
           Navigator.pop(context);
         }
+        final errorMessage = e.toString().contains('timeout')
+            ? 'Merge operation timed out. The PDFs may be too large. Please try with smaller PDFs.'
+            : e.toString().contains('permission')
+                ? 'Permission denied. Please grant storage access in settings.'
+                : 'An error occurred while merging PDFs. Please try again.';
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error merging PDFs: $e'),
-            duration: const Duration(seconds: 2),
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
@@ -1691,25 +1700,34 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           Navigator.of(context).pop(true); // Return true to indicate refresh needed
         }
       } else {
+        // PHASE 5: User-friendly error message
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to split PDF. The PDF may be too large or corrupted.'),
-              duration: Duration(seconds: 3),
+              content: Text('Failed to split PDF. The PDF may be too large or corrupted. Please try with a smaller PDF.'),
+              backgroundColor: Colors.red,
+              duration: Duration(seconds: 4),
             ),
           );
         }
       }
     } catch (e) {
-      // Close loading dialog on error
+      // PHASE 5: Close loading dialog on error and show user-friendly message
       if (mounted && dialogContext != null) {
         Navigator.of(dialogContext!).pop();
       }
       if (mounted) {
+        final errorMessage = e.toString().contains('timeout')
+            ? 'Split operation timed out. The PDF may be too large. Please try with a smaller PDF.'
+            : e.toString().contains('permission')
+                ? 'Permission denied. Please grant storage access in settings.'
+                : 'An error occurred while splitting the PDF. Please try again.';
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error splitting PDF: $e'),
-            duration: const Duration(seconds: 3),
+            content: Text(errorMessage),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }

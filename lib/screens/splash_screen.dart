@@ -1587,9 +1587,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               // Fallback UI if empty state rendering fails
               print('Error rendering empty state: $e');
               print('Stack trace: $stackTrace');
-              return const Center(
+              return Center(
                 child: Padding(
-                  padding: EdgeInsets.all(24.0),
+                  padding: const EdgeInsets.all(24.0),
                   child: Text(
                     'No PDFs found. Tap "Add PDF" to import files.',
                     textAlign: TextAlign.center,

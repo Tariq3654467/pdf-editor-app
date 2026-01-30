@@ -270,7 +270,9 @@ class MainActivity : FlutterActivity() {
             // Try multiple selection strategies - some devices might need different queries
             val selections = mutableListOf<Pair<String, Array<String>>>()
             
-            // Primary: MIME type query (most reliable)
+            // Primary: MIME type query (most reliable) - this should find ALL PDFs
+            selections.add("${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("application/pdf"))
+            // Also try without any path restrictions to find PDFs everywhere
             selections.add("${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("application/pdf"))
             
             // Also try with RELATIVE_PATH for Android 10+ (scoped storage)
@@ -666,7 +668,10 @@ class MainActivity : FlutterActivity() {
                 if (dir.exists() && dir.isDirectory) {
                     android.util.Log.d("PDFScan", "Scanning directory: $dirPath")
                     if (dir.canRead()) {
-                        scanDirectoryForPDFs(dir, pdfList, maxDepth = 5) // Increased depth
+                        // With MANAGE_EXTERNAL_STORAGE, scan with unlimited depth
+                        // Without it, use depth 10 to scan deeper subfolders
+                        val maxDepth = if (hasManageStorage) Int.MAX_VALUE else 10
+                        scanDirectoryForPDFs(dir, pdfList, maxDepth = maxDepth)
                     } else {
                         android.util.Log.w("PDFScan", "Cannot read directory: $dirPath")
                     }
@@ -687,11 +692,13 @@ class MainActivity : FlutterActivity() {
         directory: File, 
         pdfList: MutableList<Map<String, Any>>, 
         currentDepth: Int = 0,
-        maxDepth: Int = 3
+        maxDepth: Int = 10
     ) {
         // Limit recursion depth to avoid performance issues
-        if (currentDepth >= maxDepth) {
-            android.util.Log.d("PDFScan", "Max depth reached at: ${directory.absolutePath}")
+        // With MANAGE_EXTERNAL_STORAGE, use unlimited depth (Int.MAX_VALUE)
+        // Without it, use depth 10 to scan deeper subfolders
+        if (maxDepth != Int.MAX_VALUE && currentDepth >= maxDepth) {
+            android.util.Log.d("PDFScan", "Max depth reached at: ${directory.absolutePath} (depth: $currentDepth)")
             return
         }
         

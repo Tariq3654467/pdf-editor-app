@@ -7,6 +7,7 @@ import '../painters/tool_icons_painter.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../widgets/in_app_file_picker.dart';
 import 'pdf_viewer_screen.dart';
 
 class ToolsScreen extends StatefulWidget {
@@ -297,13 +298,86 @@ class _ToolsScreenState extends State<ToolsScreen> {
   Future<void> _splitPDF() async {
     if (_isProcessing) return;
 
-    final filePath = await PDFService.pickPDFFile();
-    if (filePath == null) return;
+    // Show in-app file picker
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: false,
+          title: 'Select PDF to Split',
+        ),
+      ),
+    );
+
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
+    final filePath = selectedFiles.first;
 
     setState(() => _isProcessing = true);
 
+    // Show loading dialog
+    BuildContext? dialogContext;
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        dialogContext = context;
+          return PopScope(
+          canPop: false,
+          child: Dialog(
+            child: Padding(
+              padding: const EdgeInsets.all(20.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const CircularProgressIndicator(),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Splitting PDF...',
+                    style: TextStyle(
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white
+                          : Colors.black87,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'This may take a moment',
+                    style: TextStyle(
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white70
+                          : Colors.black54,
+                      fontSize: 12,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+
     try {
-      final splitFiles = await PDFToolsService.splitPDF(filePath);
+      // Run split with timeout
+      final splitFiles = await PDFToolsService.splitPDF(filePath)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('Split PDF operation timed out');
+              return <String>[];
+            },
+          )
+          .catchError((e) {
+            print('Error in split PDF: $e');
+            return <String>[];
+          });
+
+      // Close loading dialog
+      if (mounted && dialogContext != null) {
+        Navigator.of(dialogContext!).pop();
+      }
+
       if (splitFiles.isNotEmpty) {
         // Save to history
         await PDFPreferencesService.addToolsHistory(
@@ -320,8 +394,21 @@ class _ToolsScreenState extends State<ToolsScreen> {
             ),
           );
         }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to split PDF. The PDF may be too large.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
       }
     } catch (e) {
+      // Close loading dialog on error
+      if (mounted && dialogContext != null) {
+        Navigator.of(dialogContext!).pop();
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
@@ -337,48 +424,37 @@ class _ToolsScreenState extends State<ToolsScreen> {
   Future<void> _mergePDF() async {
     if (_isProcessing) return;
 
-    final List<String> pdfPaths = [];
-    
-    // Pick multiple PDFs
-    while (true) {
-      final filePath = await PDFService.pickPDFFile();
-      if (filePath == null) break;
-      pdfPaths.add(filePath);
+    // Show in-app file picker with multi-select
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: true,
+          title: 'Select PDFs to Merge',
+        ),
+      ),
+    );
 
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
+    if (selectedFiles.length < 2) {
       if (mounted) {
-        final continuePicking = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Add More PDFs?'),
-            content: Text('${pdfPaths.length} PDF(s) selected. Add more?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Done'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Add More'),
-              ),
-            ],
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select at least 2 PDFs to merge'),
           ),
         );
-
-        if (continuePicking != true) break;
       }
+      return;
     }
-
-    if (pdfPaths.isEmpty) return;
 
     setState(() => _isProcessing = true);
 
     try {
-      final mergedPath = await PDFToolsService.mergePDFs(pdfPaths);
+      final mergedPath = await PDFToolsService.mergePDFs(selectedFiles);
       if (mergedPath != null) {
         // Save to history
         await PDFPreferencesService.addToolsHistory(
           'merge',
-          pdfPaths.first,
+          selectedFiles.first,
           resultPath: mergedPath,
         );
         widget.onOperationComplete?.call();

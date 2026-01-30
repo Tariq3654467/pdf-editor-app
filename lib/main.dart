@@ -6,6 +6,7 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'screens/splash_screen.dart';
 import 'screens/pdf_viewer_screen.dart';
+import 'services/theme_service.dart';
 
 class MyApp extends StatefulWidget {
   const MyApp({super.key});
@@ -17,14 +18,41 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   static const platform = MethodChannel('com.example.pdf_editor_app/file_intent');
   String? _initialFilePath;
+  ThemeMode _themeMode = ThemeMode.system;
 
   @override
   void initState() {
     super.initState();
+    // Initialize theme service and load theme mode
+    ThemeService.initialize().then((_) {
+      if (mounted) {
+        setState(() {
+          _themeMode = ThemeService.themeModeNotifier.value;
+        });
+      }
+    });
+    
+    // Listen to theme changes
+    ThemeService.themeModeNotifier.addListener(_onThemeChanged);
+    
     // Use post-frame callback to avoid crashes during initialization
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _getInitialFileIntent();
     });
+  }
+  
+  void _onThemeChanged() {
+    if (mounted) {
+      setState(() {
+        _themeMode = ThemeService.themeModeNotifier.value;
+      });
+    }
+  }
+  
+  @override
+  void dispose() {
+    ThemeService.themeModeNotifier.removeListener(_onThemeChanged);
+    super.dispose();
   }
 
   Future<void> _getInitialFileIntent() async {
@@ -79,8 +107,41 @@ class _MyAppState extends State<MyApp> {
     return MaterialApp(
       title: 'PDF Editor',
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFFE53935)),
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFE53935),
+          brightness: Brightness.light,
+        ),
+        useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: false,
+        ),
+        scaffoldBackgroundColor: Colors.white,
+        dialogBackgroundColor: Colors.white,
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Colors.white,
+        ),
       ),
+      darkTheme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFFE53935),
+          brightness: Brightness.dark,
+        ),
+        useMaterial3: true,
+        appBarTheme: const AppBarTheme(
+          elevation: 0,
+          centerTitle: false,
+          backgroundColor: Color(0xFF121212),
+        ),
+        scaffoldBackgroundColor: const Color(0xFF121212),
+        dialogBackgroundColor: const Color(0xFF1E1E1E),
+        bottomSheetTheme: const BottomSheetThemeData(
+          backgroundColor: Color(0xFF1E1E1E),
+        ),
+        cardColor: const Color(0xFF1E1E1E),
+        dividerColor: Colors.white24,
+      ),
+      themeMode: _themeMode,
       home: _initialFilePath != null && File(_initialFilePath!).existsSync()
           ? PDFViewerScreen(
               filePath: _initialFilePath!,

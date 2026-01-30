@@ -17,6 +17,7 @@ import '../models/pdf_file.dart' show PDFFile, PDFFolder;
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../services/pdf_cache_service.dart';
+import '../services/pdf_storage_service.dart';
 import '../models/pdf_file.dart';
 import 'pdf_viewer_screen.dart';
 import 'settings_screen.dart';
@@ -355,7 +356,7 @@ class MyHomePage extends StatefulWidget {
   State<MyHomePage> createState() => _MyHomePageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
+class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMixin {
   int _selectedTabIndex = 0;
   bool _showGroupedView = false; // Toggle between grouped and flat view
   int _selectedBottomNavIndex = 0;
@@ -368,6 +369,9 @@ class _MyHomePageState extends State<MyHomePage> {
   static const int _itemsPerPage = 20;
   int _currentPage = 0;
   final ScrollController _scrollController = ScrollController();
+  
+  @override
+  bool get wantKeepAlive => true; // Preserve state when navigating away
 
   // Feature flag: turn OFF automatic device-wide PDF scanning + permission dialog
   // For now we disable it to avoid any chance of ANR / crashes on some devices.
@@ -779,8 +783,25 @@ class _MyHomePageState extends State<MyHomePage> {
             fileSizeBytes: stat.size,
           );
           
+          // Mark as recently accessed
+          await PDFPreferencesService.setLastAccessed(filePath);
+          
+          // Update PDF with last accessed time
+          final pdfWithRecent = PDFFile(
+            name: newPDF.name,
+            date: newPDF.date,
+            size: newPDF.size,
+            isFavorite: newPDF.isFavorite,
+            filePath: newPDF.filePath,
+            lastAccessed: DateTime.now(),
+            folderPath: newPDF.folderPath,
+            folderName: newPDF.folderName,
+            dateModified: newPDF.dateModified,
+            fileSizeBytes: newPDF.fileSizeBytes,
+          );
+          
           // Add to cache immediately
-          await PDFCacheService.addPDFToCache(newPDF);
+          await PDFCacheService.addPDFToCache(pdfWithRecent);
           
           // Update local list
           setState(() {
@@ -788,10 +809,10 @@ class _MyHomePageState extends State<MyHomePage> {
             final existingIndex = pdfFiles.indexWhere((p) => p.filePath == filePath);
             if (existingIndex >= 0) {
               // Update existing
-              pdfFiles[existingIndex] = newPDF;
+              pdfFiles[existingIndex] = pdfWithRecent;
             } else {
               // Add new
-              pdfFiles.insert(0, newPDF);
+              pdfFiles.insert(0, pdfWithRecent);
             }
             // Sort by date (newest first)
             pdfFiles.sort((a, b) {
@@ -894,9 +915,27 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: const Color(0xFFE53935),
-      body: Column(
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
+    
+    // Handle back button to preserve state - use AutomaticKeepAliveClientMixin pattern
+    return PopScope(
+      canPop: true,
+      onPopInvoked: (didPop) async {
+        if (didPop) {
+          // Reload PDFs when returning to this screen to refresh recent files
+          if (mounted) {
+            // Use Future.microtask to avoid blocking navigation
+            Future.microtask(() async {
+              if (mounted) {
+                await _loadPDFs(forceRescan: false);
+              }
+            });
+          }
+        }
+      },
+      child: Scaffold(
+        backgroundColor: const Color(0xFFE53935),
+        body: Column(
         children: [
           // Red Header with rounded bottom corners
           Container(
@@ -974,9 +1013,9 @@ class _MyHomePageState extends State<MyHomePage> {
             ),
           ),
         ],
-      ),
-      // Bottom Navigation
-      bottomNavigationBar: Container(
+        ),
+        // Bottom Navigation
+        bottomNavigationBar: Container(
         decoration: BoxDecoration(
           color: Colors.white,
           boxShadow: [
@@ -1077,6 +1116,7 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+      ),
     );
   }
 
@@ -1688,21 +1728,27 @@ class _MyHomePageState extends State<MyHomePage> {
     return GestureDetector(
       onTap: () async {
         if (pdf.filePath != null) {
-          // Track that this PDF was accessed (updates cache automatically via reload)
-          await PDFPreferencesService.setLastAccessed(pdf.filePath!);
+          // Ensure PDF is in app storage (copy if external)
+          final filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
           
-          // Navigate to PDF viewer - opens instantly using cached file path
-          await Navigator.of(context).push(
+          // Track that this PDF was accessed
+          await PDFPreferencesService.setLastAccessed(filePath);
+          
+          // Navigate to PDF viewer
+          final result = await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => PDFViewerScreen(
-                filePath: pdf.filePath!,
+                filePath: filePath,
                 fileName: pdf.name,
               ),
             ),
           );
           
-          // Reload PDFs from cache to update recent list (no rescan, instant)
-          await _loadPDFs(forceRescan: false);
+          // Reload PDFs from cache to update recent list when returning
+          // This ensures the file list persists and recent files are updated
+          if (mounted) {
+            await _loadPDFs(forceRescan: false);
+          }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(

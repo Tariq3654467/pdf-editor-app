@@ -14,8 +14,10 @@ import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../services/pdf_text_editor_service.dart';
+import '../services/theme_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
+import '../widgets/in_app_file_picker.dart';
 
 class PDFViewerScreen extends StatefulWidget {
   final String filePath;
@@ -36,7 +38,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   int _currentPage = 1;
   int _totalPages = 1;
   bool _isLoading = true;
-  bool _isDarkMode = false;
   bool _isFavorite = false;
   PDFFile? _pdfFileInfo;
   bool _showPageIndicator = false;
@@ -863,10 +864,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Define colors based on dark mode
-    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
-    final textColor = _isDarkMode ? Colors.white : const Color(0xFF424242);
-    final iconColor = _isDarkMode ? Colors.white : const Color(0xFF424242);
+    // Use system theme instead of local state
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF424242);
+    final iconColor = isDarkMode ? Colors.white : const Color(0xFF424242);
     
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -929,10 +931,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           size: 24,
         ),
       ),
-      body: Stack(
-        children: [
-          // PDF Viewer with annotation overlay
-          PDFAnnotationOverlay(
+      // CRITICAL FIX: Wrap body in SafeArea to handle system insets (status bar, navigation bar)
+      // This prevents content from being cut off by ~23px on gesture navigation devices (Android 13-14)
+      body: SafeArea(
+        // Only apply top safe area (status bar), bottom is handled by bottomNavigationBar
+        top: true,
+        bottom: false,
+        child: Stack(
+          children: [
+            // PDF Viewer with annotation overlay
+            PDFAnnotationOverlay(
             key: _annotationOverlayKey,
             drawingColor: _getToolColor(),
             strokeWidth: _getStrokeWidth(),
@@ -1013,7 +1021,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 child: Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _isDarkMode 
+                    color: Theme.of(context).brightness == Brightness.dark
                         ? Colors.white.withOpacity(0.2) 
                         : Colors.black.withOpacity(0.6),
                     borderRadius: BorderRadius.circular(20),
@@ -1035,7 +1043,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             const Center(
               child: CircularProgressIndicator(),
             ),
-        ],
+          ],
+        ),
       ),
       floatingActionButton: _isEditingMode
           ? null
@@ -1083,9 +1092,19 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Widget _buildEditingToolbar() {
+    // CRITICAL FIX: Get system insets to account for navigation bar height
+    // On gesture navigation devices (Android 13-14), this is typically ~23px
+    final mediaQuery = MediaQuery.of(context);
+    final bottomPadding = mediaQuery.padding.bottom; // System navigation bar height
+    final bottomViewInsets = mediaQuery.viewInsets.bottom; // Keyboard height (if visible)
+    
+    // Total bottom inset = system padding + view insets (keyboard)
+    final totalBottomInset = bottomPadding + bottomViewInsets;
+    
     return Container(
-      height: 70,
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
+      // Dynamic height: base height (70) + system navigation bar padding
+      // This ensures toolbar is never cut off on any Android version
+      padding: EdgeInsets.only(bottom: bottomPadding),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -1096,11 +1115,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ),
         ],
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
+      child: SizedBox(
+        // Base toolbar height (70) - padding is already applied to parent Container
+        height: 70,
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            children: [
           // Undo button
           _buildToolButton(
             icon: Icons.undo,
@@ -1194,6 +1216,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -1249,9 +1272,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Widget _buildOptionsBottomSheet() {
-    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
-    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
-    final secondaryTextColor = _isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final secondaryTextColor = isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
     
     return Container(
       decoration: BoxDecoration(
@@ -1409,7 +1433,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required VoidCallback onTap,
     bool isDestructive = false,
   }) {
-    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
     final iconColor = isDestructive ? Colors.red : textColor;
     
     return ListTile(
@@ -1431,86 +1456,112 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
-  void _toggleDarkMode() {
-    setState(() {
-      _isDarkMode = !_isDarkMode;
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(_isDarkMode ? 'Dark mode enabled' : 'Dark mode disabled'),
-        duration: const Duration(seconds: 1),
-      ),
-    );
+  void _toggleDarkMode() async {
+    final currentTheme = Theme.of(context).brightness;
+    final newThemeMode = currentTheme == Brightness.dark 
+        ? ThemeMode.light 
+        : ThemeMode.dark;
+    
+    await ThemeService.setThemeMode(newThemeMode);
+    
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(newThemeMode == ThemeMode.dark 
+              ? 'Dark mode enabled' 
+              : 'Light mode enabled'),
+          duration: const Duration(seconds: 1),
+        ),
+      );
+      // Navigate back and forward to trigger theme rebuild
+      Navigator.of(context).pop();
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => PDFViewerScreen(
+            filePath: widget.filePath,
+            fileName: widget.fileName,
+          ),
+        ),
+      );
+    }
   }
 
   Future<void> _mergePDF() async {
     try {
-      // Show loading indicator
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
+      // Show in-app file picker with multi-select
+      final selectedFiles = await Navigator.of(context).push<List<String>>(
+        MaterialPageRoute(
+          builder: (context) => const InAppFilePicker(
+            allowMultiSelect: true,
+            title: 'Select PDFs to Merge',
+          ),
         ),
       );
 
-      // Pick another PDF file to merge
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['pdf'],
-      );
+      if (selectedFiles == null || selectedFiles.isEmpty) return;
+      
+      // Include current PDF in merge
+      final pdfPaths = [widget.filePath, ...selectedFiles];
 
-      if (result != null && result.files.single.path != null) {
-        final selectedPdfPath = result.files.single.path!;
-        
-        // Merge the current PDF with the selected PDF
-        final mergedPath = await PDFToolsService.mergePDFs([
+      // Show loading indicator
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+
+      // Merge PDFs
+      final mergedPath = await PDFToolsService.mergePDFs(pdfPaths);
+
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+      }
+
+      if (mergedPath != null) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'merge',
           widget.filePath,
-          selectedPdfPath,
-        ]);
-
-        // Close loading dialog
+          resultPath: mergedPath,
+        );
         if (mounted) {
-          Navigator.pop(context);
-        }
-
-        if (mergedPath != null) {
-          // Save to history
-          await PDFPreferencesService.addToolsHistory(
-            'merge',
-            widget.filePath,
-            resultPath: mergedPath,
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDFs merged successfully!'),
+              duration: Duration(seconds: 2),
+            ),
           );
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('PDFs merged successfully!'),
-                duration: Duration(seconds: 2),
+          // Navigate to merged PDF
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (context) => PDFViewerScreen(
+                filePath: mergedPath,
+                fileName: 'Merged PDF.pdf',
               ),
-            );
-            // Optionally navigate to the merged PDF or refresh
-            // You can navigate to the new merged PDF if needed
-          }
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('Failed to merge PDFs. Please try again.'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
+            ),
+          );
         }
       } else {
-        // Close loading dialog if user cancelled
         if (mounted) {
-          Navigator.pop(context);
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to merge PDFs. Please try again.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
         }
       }
     } catch (e) {
       // Close loading dialog on error
       if (mounted) {
-        Navigator.pop(context);
+        if (Navigator.canPop(context)) {
+          Navigator.pop(context);
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error merging PDFs: $e'),
@@ -1522,47 +1573,105 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   void _splitPDF() {
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Split PDF'),
-        content: Text(
-          'This will split "${widget.fileName}" into $_totalPages separate page files. Continue?',
+      builder: (context) => Theme(
+        data: Theme.of(context).copyWith(
+          dialogBackgroundColor: backgroundColor,
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+        child: AlertDialog(
+          title: Text('Split PDF', style: TextStyle(color: textColor)),
+          content: Text(
+            'This will split "${widget.fileName}" into $_totalPages separate page files. Continue?',
+            style: TextStyle(color: textColor),
           ),
-          TextButton(
-            onPressed: () async {
-              Navigator.pop(context);
-              await _performSplitPDF();
-            },
-            child: const Text('Split'),
-          ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text('Cancel', style: TextStyle(color: textColor)),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await _performSplitPDF();
+              },
+              child: const Text('Split', style: TextStyle(color: Color(0xFFE53935))),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Future<void> _performSplitPDF() async {
+    BuildContext? dialogContext;
+    
     try {
-      // Show loading indicator
+      // Show loading indicator with progress message
       showDialog(
         context: context,
         barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
+        builder: (context) {
+          dialogContext = context;
+          return PopScope(
+            canPop: false, // Prevent dismissing during operation
+            child: Dialog(
+              child: Padding(
+                padding: const EdgeInsets.all(20.0),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 16),
+                    Text(
+                      'Splitting PDF into $_totalPages pages...',
+                      style: TextStyle(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : Colors.black87,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'This may take a moment for large PDFs',
+                      style: TextStyle(
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white70
+                            : Colors.black54,
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        },
       );
 
-      // Split the PDF
-      final splitFiles = await PDFToolsService.splitPDF(widget.filePath);
+      // Run split operation with timeout to prevent indefinite hanging
+      final splitFiles = await PDFToolsService.splitPDF(widget.filePath)
+          .timeout(
+            const Duration(minutes: 5), // Max 5 minutes for very large PDFs
+            onTimeout: () {
+              print('Split PDF operation timed out');
+              return <String>[];
+            },
+          )
+          .catchError((e) {
+            print('Error in split PDF: $e');
+            return <String>[];
+          });
 
       // Close loading dialog
-      if (mounted) {
-        Navigator.pop(context);
+      if (mounted && dialogContext != null) {
+        Navigator.of(dialogContext!).pop();
       }
 
       if (splitFiles.isNotEmpty) {
@@ -1586,20 +1695,22 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Failed to split PDF. Please try again.'),
-              duration: Duration(seconds: 2),
+              content: Text('Failed to split PDF. The PDF may be too large or corrupted.'),
+              duration: Duration(seconds: 3),
             ),
           );
         }
       }
     } catch (e) {
       // Close loading dialog on error
+      if (mounted && dialogContext != null) {
+        Navigator.of(dialogContext!).pop();
+      }
       if (mounted) {
-        Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error splitting PDF: $e'),
-            duration: const Duration(seconds: 2),
+            duration: const Duration(seconds: 3),
           ),
         );
       }
@@ -2193,8 +2304,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
 
   void _showViewModeBottomSheet() {
-    final backgroundColor = _isDarkMode ? const Color(0xFF121212) : Colors.white;
-    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final backgroundColor = isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
     
     showModalBottomSheet(
       context: context,
@@ -2259,8 +2371,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required String value,
   }) {
     final isSelected = _viewMode == value;
-    final textColor = _isDarkMode ? Colors.white : const Color(0xFF263238);
-    final unselectedColor = _isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
+    final isDarkMode = Theme.of(context).brightness == Brightness.dark;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final unselectedColor = isDarkMode ? Colors.grey[400] : const Color(0xFF9E9E9E);
     
     return ListTile(
       leading: Icon(
@@ -2309,12 +2422,19 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Widget _buildPagePreviewBar() {
+    // CRITICAL FIX: Get system insets to account for navigation bar height
+    // On gesture navigation devices (Android 13-14), this is typically ~23px
+    final mediaQuery = MediaQuery.of(context);
+    final bottomPadding = mediaQuery.padding.bottom; // System navigation bar height
+    
     // Show all pages that can fit in the screen width
     final thumbnailWidth = 60.0; // Width of each thumbnail
     
     // Show all pages in a scrollable list
     return Container(
-      height: 100,
+      // Dynamic height: base height (100) + system navigation bar padding
+      // This ensures preview bar is never cut off on any Android version
+      padding: EdgeInsets.only(bottom: bottomPadding),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -2325,12 +2445,15 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ),
         ],
       ),
-      child: ListView.builder(
-        scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        itemCount: _totalPages,
-        controller: _pagePreviewScrollController,
-        physics: const BouncingScrollPhysics(),
+      child: SizedBox(
+        // Base preview bar height (100) - padding is already applied to parent Container
+        height: 100,
+        child: ListView.builder(
+          scrollDirection: Axis.horizontal,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          itemCount: _totalPages,
+          controller: _pagePreviewScrollController,
+          physics: const BouncingScrollPhysics(),
         itemBuilder: (context, index) {
           final pageNumber = index + 1;
           final isActive = _currentPage == pageNumber;
@@ -2377,6 +2500,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             ),
           );
         },
+        ),
       ),
     );
   }

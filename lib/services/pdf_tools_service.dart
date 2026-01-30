@@ -7,6 +7,11 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:archive/archive.dart';
 import 'package:image/image.dart' as img;
+import 'pdf_cache_service.dart';
+import 'pdf_preferences_service.dart';
+import 'pdf_service.dart';
+import 'pdf_storage_service.dart';
+import '../models/pdf_file.dart';
 
 class PDFToolsService {
   // Scan to PDF - Convert camera image to PDF
@@ -37,18 +42,11 @@ class PDFToolsService {
         ),
       );
 
-      // Save PDF
-      final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
-      if (!await pdfDirectory.exists()) {
-        await pdfDirectory.create(recursive: true);
-      }
-
+      // Save PDF using storage service (ensures it's in app storage)
+      final pdfBytes = await pdf.save();
       final fileName = 'Scanned_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final pdfPath = '${pdfDirectory.path}/$fileName';
-      final file = File(pdfPath);
-      await file.writeAsBytes(await pdf.save());
-
+      final pdfPath = await PDFStorageService.savePDFBytes(pdfBytes, fileName);
+      
       return pdfPath;
     } catch (e) {
       print('Error scanning to PDF: $e');
@@ -88,18 +86,11 @@ class PDFToolsService {
 
       if (!hasPages) return null;
 
-      // Save PDF
-      final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
-      if (!await pdfDirectory.exists()) {
-        await pdfDirectory.create(recursive: true);
-      }
-
+      // Save PDF using storage service (ensures it's in app storage)
+      final pdfBytes = await pdf.save();
       final fileName = 'Images_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final pdfPath = '${pdfDirectory.path}/$fileName';
-      final file = File(pdfPath);
-      await file.writeAsBytes(await pdf.save());
-
+      final pdfPath = await PDFStorageService.savePDFBytes(pdfBytes, fileName);
+      
       return pdfPath;
     } catch (e) {
       print('Error converting images to PDF: $e');
@@ -108,41 +99,60 @@ class PDFToolsService {
   }
 
   // Split PDF - Split PDF into separate page files
+  // CRITICAL: This operation is CPU-intensive and must yield to UI thread
   static Future<List<String>> splitPDF(String pdfPath) async {
     List<String> splitFiles = [];
     try {
       final file = File(pdfPath);
       if (!await file.exists()) return splitFiles;
 
+      // Read file bytes
       final bytes = await file.readAsBytes();
+      
+      // Process in chunks to avoid blocking UI thread
+      // Yield to UI thread every few pages
       final pdf = sf.PdfDocument(inputBytes: bytes);
-
-      final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
-      if (!await pdfDirectory.exists()) {
-        await pdfDirectory.create(recursive: true);
-      }
-
+      final totalPages = pdf.pages.count;
       final baseName = path.basenameWithoutExtension(pdfPath);
 
-      for (int i = 0; i < pdf.pages.count; i++) {
-        final singlePagePdf = sf.PdfDocument();
-        final sourcePage = pdf.pages[i];
-        final newPage = singlePagePdf.pages.add();
+      // Process pages with periodic yields to prevent UI freeze
+      for (int i = 0; i < totalPages; i++) {
+        // Yield to UI thread every 5 pages to prevent ANR
+        if (i > 0 && i % 5 == 0) {
+          await Future.delayed(const Duration(milliseconds: 10));
+        }
         
-        // Create template from source page and draw it on new page
-        final template = sourcePage.createTemplate();
-        final pageSize = sourcePage.size;
-        newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
+        try {
+          final singlePagePdf = sf.PdfDocument();
+          final sourcePage = pdf.pages[i];
+          final newPage = singlePagePdf.pages.add();
+          
+          // Create template from source page and draw it on new page
+          final template = sourcePage.createTemplate();
+          final pageSize = sourcePage.size;
+          newPage.graphics.drawPdfTemplate(
+            template, 
+            const ui.Offset(0, 0), 
+            ui.Size(pageSize.width, pageSize.height),
+          );
 
-        final fileName = '${baseName}_page_${i + 1}.pdf';
-        final splitPath = '${pdfDirectory.path}/$fileName';
-        final splitFile = File(splitPath);
-        final splitBytes = await singlePagePdf.save();
-        await splitFile.writeAsBytes(splitBytes);
-        splitFiles.add(splitPath);
-        
-        singlePagePdf.dispose();
+          final fileName = '${baseName}_page_${i + 1}.pdf';
+          final splitBytes = await singlePagePdf.save();
+          
+          // Dispose immediately to free memory
+          singlePagePdf.dispose();
+          
+          // Save using storage service (ensures it's in app storage)
+          // This is I/O bound, so it's okay to await
+          final splitPath = await PDFStorageService.savePDFBytes(splitBytes, fileName);
+          if (splitPath != null) {
+            splitFiles.add(splitPath);
+          }
+        } catch (e) {
+          print('Error splitting page ${i + 1}: $e');
+          // Continue with next page instead of failing completely
+          continue;
+        }
       }
 
       pdf.dispose();
@@ -184,19 +194,12 @@ class PDFToolsService {
         return null;
       }
 
-      // Save merged PDF
-      final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
-      if (!await pdfDirectory.exists()) {
-        await pdfDirectory.create(recursive: true);
-      }
-
-      final fileName = 'Merged_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final mergedPath = '${pdfDirectory.path}/$fileName';
-      final mergedFile = File(mergedPath);
+      // Save merged PDF using storage service (ensures it's in app storage)
       final mergedBytes = await mergedPdf.save();
-      await mergedFile.writeAsBytes(mergedBytes);
       mergedPdf.dispose();
+      
+      final fileName = 'Merged_${DateTime.now().millisecondsSinceEpoch}.pdf';
+      final mergedPath = await PDFStorageService.savePDFBytes(mergedBytes, fileName);
 
       return mergedPath;
     } catch (e) {
@@ -226,22 +229,15 @@ class PDFToolsService {
         newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
       }
 
-      // Save compressed PDF
-      final directory = await getApplicationDocumentsDirectory();
-      final pdfDirectory = Directory('${directory.path}/PDFs');
-      if (!await pdfDirectory.exists()) {
-        await pdfDirectory.create(recursive: true);
-      }
+      // Save compressed PDF using storage service (ensures it's in app storage)
+      final compressedBytes = await compressedPdf.save();
+      pdf.dispose();
+      compressedPdf.dispose();
 
       final baseName = path.basenameWithoutExtension(pdfPath);
       final fileName = '${baseName}_compressed.pdf';
-      final compressedPath = '${pdfDirectory.path}/$fileName';
-      final compressedFile = File(compressedPath);
-      final compressedBytes = await compressedPdf.save();
-      await compressedFile.writeAsBytes(compressedBytes);
+      final compressedPath = await PDFStorageService.savePDFBytes(compressedBytes, fileName);
 
-      pdf.dispose();
-      compressedPdf.dispose();
       return compressedPath;
     } catch (e) {
       print('Error compressing PDF: $e');
@@ -285,5 +281,6 @@ class PDFToolsService {
       return null;
     }
   }
+
 }
 

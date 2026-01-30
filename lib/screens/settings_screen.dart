@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:in_app_review/in_app_review.dart';
+import '../services/theme_service.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -12,22 +13,43 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _selectedLanguage = 'English';
+  ThemeMode _currentThemeMode = ThemeMode.system;
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadThemeMode();
+  }
+  
+  Future<void> _loadThemeMode() async {
+    final themeMode = await ThemeService.getThemeMode();
+    if (mounted) {
+      setState(() {
+        _currentThemeMode = themeMode;
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final isDarkMode = ThemeService.isDarkMode(context);
+    final backgroundColor = isDarkMode ? const Color(0xFF121212) : Colors.white;
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final iconColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    
     return Scaffold(
-      backgroundColor: Colors.white,
+      backgroundColor: backgroundColor,
       appBar: AppBar(
-        backgroundColor: Colors.white,
+        backgroundColor: backgroundColor,
         elevation: 0,
         leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Color(0xFF263238)),
+          icon: Icon(Icons.arrow_back, color: iconColor),
           onPressed: () => Navigator.pop(context),
         ),
-        title: const Text(
+        title: Text(
           'Settings',
           style: TextStyle(
-            color: Color(0xFF263238),
+            color: textColor,
             fontSize: 20,
             fontWeight: FontWeight.bold,
           ),
@@ -53,6 +75,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildPremiumBanner() {
+    final isDarkMode = ThemeService.isDarkMode(context);
+    
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(20),
@@ -125,9 +149,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Widget _buildSettingsCard() {
+    final isDarkMode = ThemeService.isDarkMode(context);
+    final cardColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
+    
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: cardColor,
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
@@ -139,6 +166,35 @@ class _SettingsScreenState extends State<SettingsScreen> {
       ),
       child: Column(
         children: [
+          // Theme option
+          _buildSettingsTile(
+            icon: Icons.dark_mode,
+            title: 'Theme',
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _getThemeModeText(),
+                  style: TextStyle(
+                    color: ThemeService.isDarkMode(context) 
+                        ? Colors.white 
+                        : const Color(0xFF263238),
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Icon(
+                  Icons.keyboard_arrow_down,
+                  color: ThemeService.isDarkMode(context)
+                      ? Colors.white70
+                      : const Color(0xFF9E9E9E),
+                  size: 20,
+                ),
+              ],
+            ),
+            onTap: _showThemeDialog,
+          ),
+          const Divider(height: 1, indent: 60),
           // Language option
           _buildSettingsTile(
             icon: Icons.description,
@@ -148,15 +204,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               children: [
                 Text(
                   _selectedLanguage,
-                  style: const TextStyle(
-                    color: Color(0xFF263238),
+                  style: TextStyle(
+                    color: ThemeService.isDarkMode(context)
+                        ? Colors.white
+                        : const Color(0xFF263238),
                     fontSize: 14,
                   ),
                 ),
                 const SizedBox(width: 8),
-                const Icon(
+                Icon(
                   Icons.keyboard_arrow_down,
-                  color: Color(0xFF9E9E9E),
+                  color: ThemeService.isDarkMode(context)
+                      ? Colors.white70
+                      : const Color(0xFF9E9E9E),
                   size: 20,
                 ),
               ],
@@ -202,26 +262,105 @@ class _SettingsScreenState extends State<SettingsScreen> {
     Widget? trailing,
     required VoidCallback onTap,
   }) {
+    final isDarkMode = ThemeService.isDarkMode(context);
+    final iconColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final trailingColor = isDarkMode ? Colors.white70 : const Color(0xFF9E9E9E);
+    
     return ListTile(
       leading: Icon(
         icon,
-        color: const Color(0xFF263238),
+        color: iconColor,
         size: 24,
       ),
       title: Text(
         title,
-        style: const TextStyle(
-          color: Color(0xFF263238),
+        style: TextStyle(
+          color: textColor,
           fontSize: 16,
           fontWeight: FontWeight.w500,
         ),
       ),
-      trailing: trailing ?? const Icon(
+      trailing: trailing ?? Icon(
         Icons.chevron_right,
-        color: Color(0xFF9E9E9E),
+        color: trailingColor,
         size: 20,
       ),
       onTap: onTap,
+    );
+  }
+  
+  String _getThemeModeText() {
+    switch (_currentThemeMode) {
+      case ThemeMode.light:
+        return 'Light';
+      case ThemeMode.dark:
+        return 'Dark';
+      case ThemeMode.system:
+      default:
+        return 'System';
+    }
+  }
+  
+  void _showThemeDialog() {
+    showDialog(
+      context: context,
+      builder: (context) {
+        final isDarkMode = ThemeService.isDarkMode(context);
+        final backgroundColor = isDarkMode ? const Color(0xFF1E1E1E) : Colors.white;
+        final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+        
+        return Theme(
+          data: Theme.of(context).copyWith(
+            dialogBackgroundColor: backgroundColor,
+          ),
+          child: AlertDialog(
+            title: Text('Select Theme', style: TextStyle(color: textColor)),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildThemeOption('System', ThemeMode.system, Icons.brightness_auto),
+                _buildThemeOption('Light', ThemeMode.light, Icons.light_mode),
+                _buildThemeOption('Dark', ThemeMode.dark, Icons.dark_mode),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+  
+  Widget _buildThemeOption(String label, ThemeMode themeMode, IconData icon) {
+    final isDarkMode = ThemeService.isDarkMode(context);
+    final textColor = isDarkMode ? Colors.white : const Color(0xFF263238);
+    final isSelected = _currentThemeMode == themeMode;
+    
+    return ListTile(
+      leading: Icon(icon, color: isSelected ? const Color(0xFFE53935) : textColor),
+      title: Text(label, style: TextStyle(color: textColor)),
+      trailing: isSelected
+          ? const Icon(Icons.check, color: Color(0xFFE53935))
+          : null,
+      onTap: () async {
+        setState(() {
+          _currentThemeMode = themeMode;
+        });
+        await ThemeService.setThemeMode(themeMode);
+        Navigator.pop(context);
+        // Trigger app rebuild by showing a snackbar
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Theme changed to $label'),
+              duration: const Duration(seconds: 1),
+            ),
+          );
+        }
+        // Force app to rebuild with new theme
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      },
     );
   }
 

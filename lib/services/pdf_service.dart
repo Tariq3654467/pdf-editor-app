@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../models/pdf_file.dart';
 import 'pdf_preferences_service.dart';
+import 'pdf_storage_service.dart';
 
 class PDFService {
   static const MethodChannel _pdfScanChannel = MethodChannel('com.example.pdf_editor_app/pdf_scan');
@@ -247,22 +248,10 @@ class PDFService {
       );
 
       if (result != null && result.files.single.path != null) {
-        // Copy file to app's PDF directory
-        final sourceFile = File(result.files.single.path!);
-        final directory = await getApplicationDocumentsDirectory();
-        final pdfDirectory = Directory('${directory.path}/PDFs');
-
-        if (!await pdfDirectory.exists()) {
-          await pdfDirectory.create(recursive: true);
-        }
-
-        final fileName = path.basename(sourceFile.path);
-        final destFile = File('${pdfDirectory.path}/$fileName');
-
-        // Copy file
-        await sourceFile.copy(destFile.path);
-
-        return destFile.path;
+        // Copy file to app storage using storage service
+        final sourcePath = result.files.single.path!;
+        final copiedPath = await PDFStorageService.copyToAppStorage(sourcePath);
+        return copiedPath;
       }
     } catch (e) {
       print('Error picking PDF: $e');

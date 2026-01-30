@@ -1532,7 +1532,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('PDFs merged successfully!'),
+              content: Text('PDFs merged successfully! File saved in app storage.'),
               duration: Duration(seconds: 2),
             ),
           );
@@ -1681,15 +1681,19 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           widget.filePath,
           resultPath: splitFiles.first,
         );
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'PDF split successfully! Created ${splitFiles.length} page file(s).',
+                'PDF split successfully! Created ${splitFiles.length} page file(s). Files are saved in app storage.',
               ),
               duration: const Duration(seconds: 3),
             ),
           );
+          
+          // Pop back to home screen - it will reload files automatically
+          Navigator.of(context).pop(true); // Return true to indicate refresh needed
         }
       } else {
         if (mounted) {

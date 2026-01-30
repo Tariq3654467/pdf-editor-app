@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import '../models/pdf_file.dart';
 import 'pdf_service.dart';
 import 'pdf_preferences_service.dart';
@@ -127,6 +128,17 @@ class PDFStorageService {
       // Mark as recently accessed
       await PDFPreferencesService.setLastAccessed(targetPath);
       
+      // Also save to external storage (Downloads) so it's visible in file manager
+      // This is optional - files are already in app storage
+      if (!kIsWeb && Platform.isAndroid) {
+        try {
+          await _saveToExternalStorage(targetPath, fileName);
+        } catch (e) {
+          print('PDFStorageService: Could not save to external storage: $e');
+          // Continue - file is already saved in app storage
+        }
+      }
+      
       print('PDFStorageService: Saved PDF to app storage: $targetPath');
       return targetPath;
     } catch (e) {
@@ -164,6 +176,52 @@ class PDFStorageService {
     } catch (e) {
       print('PDFStorageService: Error ensuring in app storage: $e');
       return filePath;
+    }
+  }
+  
+  /// Save PDF to external storage (Downloads folder) so it's visible in file manager
+  /// This is a convenience method - files are always saved in app storage first
+  static Future<void> _saveToExternalStorage(String sourcePath, String fileName) async {
+    try {
+      // Try to get external storage directory
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir == null) return;
+      
+      // Navigate to Downloads folder
+      // On Android, external storage is typically at /storage/emulated/0/Android/data/package/files
+      // We'll try to save to a "PDFs" folder in external storage
+      final downloadsPath = '${externalDir.path}/PDFs';
+      final downloadsDir = Directory(downloadsPath);
+      
+      if (!await downloadsDir.exists()) {
+        await downloadsDir.create(recursive: true);
+      }
+      
+      // Copy file to external storage
+      final sourceFile = File(sourcePath);
+      if (await sourceFile.exists()) {
+        final targetPath = path.join(downloadsPath, fileName);
+        final targetFile = File(targetPath);
+        
+        // Handle duplicates
+        var finalTargetPath = targetPath;
+        var finalTargetFile = targetFile;
+        int counter = 1;
+        while (await finalTargetFile.exists()) {
+          final nameWithoutExt = path.basenameWithoutExtension(fileName);
+          final ext = path.extension(fileName);
+          final newFileName = '${nameWithoutExt}_$counter$ext';
+          finalTargetPath = path.join(downloadsPath, newFileName);
+          finalTargetFile = File(finalTargetPath);
+          counter++;
+        }
+        
+        await sourceFile.copy(finalTargetPath);
+        print('PDFStorageService: Also saved to external storage: $finalTargetPath');
+      }
+    } catch (e) {
+      // Silently fail - external storage is optional
+      print('PDFStorageService: Error saving to external storage: $e');
     }
   }
 }

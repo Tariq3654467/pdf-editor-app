@@ -373,10 +373,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   @override
   bool get wantKeepAlive => true; // Preserve state when navigating away
 
-  // Feature flag: turn OFF automatic device-wide PDF scanning + permission dialog
-  // For now we disable it to avoid any chance of ANR / crashes on some devices.
-  // PDFs can still be added manually and scan can be triggered via the \"Retry Scan\" button.
-  static const bool _enableAutomaticDeviceScan = false;
+  // Feature flag: Enable automatic device-wide PDF scanning
+  // Automatic scanning runs in background with timeouts to prevent ANR
+  // PDFs are loaded from cache first, then refreshed in background
+  static const bool _enableAutomaticDeviceScan = true;
 
   @override
   void initState() {
@@ -390,7 +390,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       if (!mounted) return;
       
       try {
-        // 1) Load cached PDFs only (no automatic device scan)
+        // 1) Load cached PDFs first (instant display)
         _loadCachedPDFsFirst();
 
         // 2) Load tools history separately (non-blocking)
@@ -400,6 +400,19 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             print('Error loading tools history: $e');
           });
         });
+        
+        // 3) Trigger automatic background scan if enabled
+        if (_enableAutomaticDeviceScan) {
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (!mounted) return;
+            // Start background scan (non-blocking, with timeouts)
+            _loadPDFs(forceRescan: false);
+            // Also check and request storage access if needed
+            _checkAndRequestAccess().catchError((e) {
+              print('Error checking storage access: $e');
+            });
+          });
+        }
       } catch (e, stackTrace) {
         print('Error in delayed init: $e');
         print('Stack trace: $stackTrace');
@@ -426,10 +439,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       if (mounted) {
         setState(() {
           pdfFiles = cachedPDFs;
-          // We are disabling automatic device-wide scanning for now,
-          // so there is no long-running loading operation here.
-          // If there is no cache, simply show the empty state.
-          _isLoading = false;
+          // Show loading indicator if no cache and automatic scan is enabled
+          _isLoading = cachedPDFs.isEmpty && _enableAutomaticDeviceScan;
         });
       }
     } catch (e, stackTrace) {
@@ -1006,7 +1017,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   ? _buildHomeContent()
                   : ToolsScreen(
                       onOperationComplete: () {
-                        _loadPDFs();
+                        // Force refresh of PDF list to show newly created files
+                        _loadPDFs(forceRescan: false);
                         _loadToolsHistory();
                       },
                     ),
@@ -1744,8 +1756,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             ),
           );
           
-          // Reload PDFs from cache to update recent list when returning
-          // This ensures the file list persists and recent files are updated
+          // Reload PDFs when returning from PDF viewer
+          // This ensures newly created files (split, merge, etc.) appear in the list
           if (mounted) {
             await _loadPDFs(forceRescan: false);
           }

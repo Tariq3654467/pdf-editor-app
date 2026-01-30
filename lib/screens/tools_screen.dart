@@ -385,12 +385,17 @@ class _ToolsScreenState extends State<ToolsScreen> {
           filePath,
           resultPath: splitFiles.first,
         );
+        
+        // Trigger refresh of file list
         widget.onOperationComplete?.call();
+        
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('PDF split into ${splitFiles.length} files'),
-              duration: const Duration(seconds: 2),
+              content: Text(
+                'PDF split into ${splitFiles.length} files. Files saved in app storage and will appear in your file list.',
+              ),
+              duration: const Duration(seconds: 3),
             ),
           );
         }
@@ -457,7 +462,9 @@ class _ToolsScreenState extends State<ToolsScreen> {
           selectedFiles.first,
           resultPath: mergedPath,
         );
+        // Trigger refresh of file list
         widget.onOperationComplete?.call();
+        
         if (mounted) {
           Navigator.of(context).push(
             MaterialPageRoute(
@@ -469,8 +476,8 @@ class _ToolsScreenState extends State<ToolsScreen> {
           );
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('PDFs merged successfully'),
-              duration: Duration(seconds: 2),
+              content: Text('PDFs merged successfully! File saved in app storage and will appear in your file list.'),
+              duration: Duration(seconds: 3),
             ),
           );
         }

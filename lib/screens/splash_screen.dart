@@ -1398,8 +1398,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               Flexible(
                 child: Text(
                   '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
-                  style: const TextStyle(
-                    color: Color(0xFF263238),
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.titleLarge?.color,
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -1513,8 +1513,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       const SizedBox(height: 16),
                       Text(
                         emptyTitle,
-                        style: const TextStyle(
-                          color: Color(0xFF9E9E9E),
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1523,8 +1523,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       const SizedBox(height: 8),
                       Text(
                         emptyMessage,
-                        style: const TextStyle(
-                          color: Color(0xFF9E9E9E),
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodySmall?.color,
                           fontSize: 14,
                         ),
                         textAlign: TextAlign.center,
@@ -1617,12 +1617,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text(
+                    Text(
                       'Recent Tools Activity',
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: Color(0xFF263238),
+                        color: Theme.of(context).textTheme.titleMedium?.color,
                       ),
                     ),
                     TextButton(
@@ -1710,18 +1710,18 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           Expanded(
             child: Text(
               operationName,
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 12,
-                color: Color(0xFF263238),
+                color: Theme.of(context).textTheme.bodyMedium?.color,
               ),
             ),
           ),
           if (dateTime != null)
             Text(
               _formatHistoryTime(dateTime),
-              style: const TextStyle(
+              style: TextStyle(
                 fontSize: 11,
-                color: Color(0xFF9E9E9E),
+                color: Theme.of(context).textTheme.bodySmall?.color,
               ),
             ),
         ],
@@ -1761,10 +1761,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 color: Color(0xFFBDBDBD),
               ),
               const SizedBox(height: 16),
-              const Text(
+              Text(
                 'No PDFs found',
                 style: TextStyle(
-                  color: Color(0xFF9E9E9E),
+                  color: Theme.of(context).textTheme.bodyMedium?.color,
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
                 ),
@@ -1946,8 +1946,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             pdf.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              color: Color(0xFF263238),
+            style: TextStyle(
+              color: Theme.of(context).textTheme.titleMedium?.color,
               fontSize: 14,
               fontWeight: FontWeight.w500,
             ),
@@ -1956,8 +1956,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             isNested 
                 ? '${pdf.date} • ${pdf.size}'
                 : '${pdf.folderName ?? "Unknown"} • ${pdf.date} • ${pdf.size}',
-            style: const TextStyle(
-              color: Color(0xFF9E9E9E),
+            style: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color,
               fontSize: 12,
             ),
           ),
@@ -2025,16 +2025,22 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               width: 40,
               height: 4,
               decoration: BoxDecoration(
-                color: Colors.grey[300],
+                color: Theme.of(context).dividerColor,
                 borderRadius: BorderRadius.circular(2),
               ),
             ),
             if (pdf.filePath != null) ...[
               ListTile(
-                leading: const Icon(Icons.drive_file_rename_outline, color: Color(0xFF263238)),
-                title: const Text(
+                leading: Icon(
+                  Icons.drive_file_rename_outline,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: Text(
                   'Rename',
-                  style: TextStyle(color: Color(0xFF263238), fontSize: 16),
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                    fontSize: 16,
+                  ),
                 ),
                 onTap: () {
                   Navigator.pop(context);
@@ -2042,10 +2048,16 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.share, color: Color(0xFF263238)),
-                title: const Text(
+                leading: Icon(
+                  Icons.share,
+                  color: Theme.of(context).iconTheme.color,
+                ),
+                title: Text(
                   'Share',
-                  style: TextStyle(color: Color(0xFF263238), fontSize: 16),
+                  style: TextStyle(
+                    color: Theme.of(context).textTheme.bodyLarge?.color,
+                    fontSize: 16,
+                  ),
                 ),
                 onTap: () async {
                   Navigator.pop(context);

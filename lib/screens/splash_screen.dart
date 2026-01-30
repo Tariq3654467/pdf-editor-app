@@ -1523,7 +1523,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       Text(
                         emptyTitle,
                         style: TextStyle(
-                          color: Theme.of(context).textTheme.bodyMedium?.color,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white70
+                              : Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black54,
                           fontSize: 16,
                           fontWeight: FontWeight.w500,
                         ),
@@ -1533,7 +1535,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       Text(
                         emptyMessage,
                         style: TextStyle(
-                          color: Theme.of(context).textTheme.bodySmall?.color,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white60
+                              : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black45,
                           fontSize: 14,
                         ),
                         textAlign: TextAlign.center,
@@ -1589,7 +1593,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   child: Text(
                     'No PDFs found. Tap "Add PDF" to import files.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF9E9E9E)),
+                    style: TextStyle(
+                      color: Theme.of(context).brightness == Brightness.dark
+                          ? Colors.white60
+                          : const Color(0xFF9E9E9E),
+                    ),
                   ),
                 ),
               );
@@ -1631,7 +1639,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       style: TextStyle(
                         fontSize: 14,
                         fontWeight: FontWeight.w600,
-                        color: Theme.of(context).textTheme.titleMedium?.color,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
                       ),
                     ),
                     TextButton(
@@ -1721,7 +1731,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               operationName,
               style: TextStyle(
                 fontSize: 12,
-                color: Theme.of(context).textTheme.bodyMedium?.color,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black87,
               ),
             ),
           ),
@@ -1730,7 +1742,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               _formatHistoryTime(dateTime),
               style: TextStyle(
                 fontSize: 11,
-                color: Theme.of(context).textTheme.bodySmall?.color,
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white70
+                    : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
               ),
             ),
         ],
@@ -1773,7 +1787,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               Text(
                 'No PDFs found',
                 style: TextStyle(
-                  color: Theme.of(context).textTheme.bodyMedium?.color,
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white70
+                      : Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black54,
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
                 ),

@@ -67,7 +67,21 @@ class PDFStorageService {
         fileSizeBytes: stat.size,
       );
       
-      // Add to cache
+      // PHASE 2: Verify file exists before updating cache
+      if (!await targetFile.exists()) {
+        print('PDFStorageService: ERROR - File was not copied: $targetPath');
+        return null;
+      }
+      
+      final actualFileSize = await targetFile.length();
+      if (actualFileSize == 0) {
+        print('PDFStorageService: ERROR - Copied file is empty: $targetPath');
+        return null;
+      }
+      
+      print('PDFStorageService: Verified copied file exists: $targetPath (${actualFileSize} bytes)');
+      
+      // PHASE 2: Update cache with verified file
       await PDFCacheService.addPDFToCache(pdfFile);
       
       // Mark as recently accessed
@@ -122,7 +136,21 @@ class PDFStorageService {
         fileSizeBytes: stat.size,
       );
       
-      // Add to cache - CRITICAL: This must complete before returning
+      // PHASE 2: Verify file exists before updating cache
+      if (!await targetFile.exists()) {
+        print('PDFStorageService: ERROR - File was not saved: $targetPath');
+        throw Exception('Failed to save PDF file');
+      }
+      
+      final actualFileSize = await targetFile.length();
+      if (actualFileSize == 0) {
+        print('PDFStorageService: ERROR - File is empty: $targetPath');
+        throw Exception('Saved PDF file is empty');
+      }
+      
+      print('PDFStorageService: Verified file exists: $targetPath (${actualFileSize} bytes)');
+      
+      // PHASE 2: Update cache with verified file - CRITICAL: Must complete before returning
       await PDFCacheService.addPDFToCache(pdfFile);
       print('PDFStorageService: Added PDF to cache: ${pdfFile.name}');
       
@@ -130,20 +158,10 @@ class PDFStorageService {
       await PDFPreferencesService.setLastAccessed(targetPath);
       print('PDFStorageService: Marked as recently accessed: $targetPath');
       
-      // Also save to external storage (Downloads) so it's visible in file manager
-      // This is optional - files are already in app storage
-      if (!kIsWeb && Platform.isAndroid) {
-        try {
-          await _saveToExternalStorage(targetPath, fileName);
-        } catch (e) {
-          print('PDFStorageService: Could not save to external storage: $e');
-          // Continue - file is already saved in app storage
-        }
-      }
+      // PHASE 2: App-storage-only - removed external storage saving
+      // All files are managed internally in app storage
       
       print('PDFStorageService: Saved PDF to app storage: $targetPath');
-      print('PDFStorageService: File exists: ${await targetFile.exists()}');
-      print('PDFStorageService: File size: ${await targetFile.length()} bytes');
       return targetPath;
     } catch (e) {
       print('PDFStorageService: Error saving PDF bytes: $e');

@@ -1031,16 +1031,48 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     super.build(context); // Required for AutomaticKeepAliveClientMixin
     
     // Handle back button to preserve state - use AutomaticKeepAliveClientMixin pattern
+    // PHASE 3 FIX: Cache-first strategy - do NOT reload on every back navigation
     return PopScope(
       canPop: true,
       onPopInvoked: (didPop) async {
         if (didPop) {
-          // Reload PDFs when returning to this screen to refresh recent files
+          // PHASE 3: Only refresh cache in background, don't reload UI
+          // State is preserved by AutomaticKeepAliveClientMixin
           if (mounted) {
-            // Use Future.microtask to avoid blocking navigation
+            // Background refresh only - no UI flicker
             Future.microtask(() async {
               if (mounted) {
-                await _loadPDFs(forceRescan: false);
+                // Silently refresh cache in background without UI update
+                try {
+                  final cachedPDFs = await PDFCacheService.loadPDFList();
+                  // Only update if cache has more files than current list
+                  if (mounted && cachedPDFs.length > pdfFiles.length) {
+                    setState(() {
+                      pdfFiles = cachedPDFs;
+                    });
+                  }
+                  // Trigger background scan if cache is old (> 1 minute)
+                  final cacheTimestamp = await PDFCacheService.getCacheTimestamp();
+                  if (cacheTimestamp != null) {
+                    final age = DateTime.now().difference(cacheTimestamp);
+                    if (age.inMinutes > 1) {
+                      // Background scan - don't await, don't update UI
+                      PDFScannerService.scanAllPDFsInBackground().then((newPDFs) {
+                        if (mounted && newPDFs.isNotEmpty) {
+                          // Only update if we got new files
+                          setState(() {
+                            pdfFiles = newPDFs;
+                          });
+                        }
+                      }).catchError((e) {
+                        print('Background scan error: $e');
+                      });
+                    }
+                  }
+                } catch (e) {
+                  print('Error refreshing cache on back navigation: $e');
+                  // Don't reload - preserve current state
+                }
               }
             });
           }

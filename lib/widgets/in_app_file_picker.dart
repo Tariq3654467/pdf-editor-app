@@ -90,8 +90,11 @@ class _InAppFilePickerState extends State<InAppFilePicker> {
       return;
     }
     
+    // Call callback if provided
     widget.onFilesSelected?.call(_selectedFiles.toList());
-    Navigator.of(context).pop();
+    
+    // Return selected files via Navigator.pop() for use with Navigator.push
+    Navigator.of(context).pop(_selectedFiles.toList());
   }
 
   @override
@@ -114,21 +117,30 @@ class _InAppFilePickerState extends State<InAppFilePicker> {
           widget.title ?? (widget.allowMultiSelect ? 'Select PDFs' : 'Select PDF'),
           style: TextStyle(color: textColor),
         ),
-        actions: widget.allowMultiSelect
-            ? [
-                TextButton(
-                  onPressed: _confirmSelection,
-                  child: Text(
-                    'Select (${_selectedFiles.length})',
-                    style: TextStyle(
-                      color: _selectedFiles.isEmpty
-                          ? secondaryTextColor
-                          : const Color(0xFFE53935),
-                    ),
-                  ),
+        actions: [
+          if (widget.allowMultiSelect)
+            TextButton(
+              onPressed: _confirmSelection,
+              child: Text(
+                'Select (${_selectedFiles.length})',
+                style: TextStyle(
+                  color: _selectedFiles.isEmpty
+                      ? secondaryTextColor
+                      : const Color(0xFFE53935),
                 ),
-              ]
-            : null,
+              ),
+            )
+          else if (_selectedFiles.isNotEmpty)
+            TextButton(
+              onPressed: _confirmSelection,
+              child: Text(
+                'Select',
+                style: const TextStyle(
+                  color: Color(0xFFE53935),
+                ),
+              ),
+            ),
+        ],
       ),
       body: Column(
         children: [

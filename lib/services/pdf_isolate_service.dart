@@ -1,9 +1,12 @@
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:path/path.dart' as path;
 
 /// Service for running heavy PDF operations in isolates to prevent ANR
 /// All PDF parsing, rendering, and saving operations run off the main thread
@@ -30,6 +33,21 @@ class PDFIsolateService {
   /// Parse PDF document in isolate
   static Future<PDFDocumentData> parsePDF(String filePath) async {
     return await compute(_parsePDFIsolate, filePath);
+  }
+
+  /// Split PDF in isolate - CRITICAL: Prevents ANR
+  static Future<List<String>> splitPDF(String pdfPath) async {
+    return await compute(_splitPDFIsolate, pdfPath);
+  }
+
+  /// Merge PDFs in isolate - CRITICAL: Prevents ANR
+  static Future<String?> mergePDFs(List<String> pdfPaths) async {
+    return await compute(_mergePDFsIsolate, pdfPaths);
+  }
+
+  /// Compress PDF in isolate - CRITICAL: Prevents ANR
+  static Future<String?> compressPDF(String pdfPath) async {
+    return await compute(_compressPDFIsolate, pdfPath);
   }
 }
 
@@ -320,5 +338,228 @@ class PDFPageData {
     required this.width,
     required this.height,
   });
+}
+
+/// Isolate function: Split PDF
+static Future<List<String>> _splitPDFIsolate(String pdfPath) async {
+  final List<String> splitFiles = [];
+  sf.PdfDocument? pdf;
+  
+  try {
+    final file = File(pdfPath);
+    if (!await file.exists()) return splitFiles;
+
+    final bytes = await file.readAsBytes();
+    pdf = sf.PdfDocument(inputBytes: bytes);
+    final totalPages = pdf.pages.count;
+    final baseName = path.basenameWithoutExtension(pdfPath);
+
+    for (int i = 0; i < totalPages; i++) {
+      try {
+        final singlePagePdf = sf.PdfDocument();
+        final sourcePage = pdf.pages[i];
+        final newPage = singlePagePdf.pages.add();
+        
+        final template = sourcePage.createTemplate();
+        final pageSize = sourcePage.size;
+        newPage.graphics.drawPdfTemplate(
+          template,
+          const ui.Offset(0, 0),
+          ui.Size(pageSize.width, pageSize.height),
+        );
+
+        final fileName = '${baseName}_page_${i + 1}.pdf';
+        final splitBytes = await singlePagePdf.save();
+        singlePagePdf.dispose();
+
+        // Save to app storage directory
+        final directory = await getApplicationDocumentsDirectory();
+        final pdfDirectory = Directory('${directory.path}/PDFs');
+        if (!await pdfDirectory.exists()) {
+          await pdfDirectory.create(recursive: true);
+        }
+
+        var targetPath = path.join(pdfDirectory.path, fileName);
+        var targetFile = File(targetPath);
+        int counter = 1;
+        
+        while (await targetFile.exists()) {
+          final nameWithoutExt = path.basenameWithoutExtension(fileName);
+          final ext = path.extension(fileName);
+          final newFileName = '${nameWithoutExt}_$counter$ext';
+          targetPath = path.join(pdfDirectory.path, newFileName);
+          targetFile = File(targetPath);
+          counter++;
+        }
+
+        await targetFile.writeAsBytes(splitBytes);
+        splitFiles.add(targetPath);
+      } catch (e) {
+        print('Error splitting page ${i + 1}: $e');
+        continue;
+      }
+    }
+
+    pdf?.dispose();
+    return splitFiles;
+  } catch (e) {
+    pdf?.dispose();
+    print('Error splitting PDF: $e');
+    return splitFiles;
+  }
+}
+
+/// Isolate function: Merge PDFs
+static Future<String?> _mergePDFsIsolate(List<String> pdfPaths) async {
+  sf.PdfDocument? mergedPdf;
+  final List<sf.PdfDocument> pdfsToDispose = [];
+  
+  try {
+    if (pdfPaths.isEmpty) return null;
+
+    mergedPdf = sf.PdfDocument();
+
+    for (var pdfPath in pdfPaths) {
+      final file = File(pdfPath);
+      if (!await file.exists()) continue;
+
+      final bytes = await file.readAsBytes();
+      final pdf = sf.PdfDocument(inputBytes: bytes);
+      pdfsToDispose.add(pdf);
+
+      for (int i = 0; i < pdf.pages.count; i++) {
+        final sourcePage = pdf.pages[i];
+        final newPage = mergedPdf.pages.add();
+        final template = sourcePage.createTemplate();
+        final pageSize = sourcePage.size;
+        newPage.graphics.drawPdfTemplate(
+          template,
+          const ui.Offset(0, 0),
+          ui.Size(pageSize.width, pageSize.height),
+        );
+      }
+    }
+
+    if (mergedPdf.pages.count == 0) {
+      mergedPdf.dispose();
+      for (var pdf in pdfsToDispose) {
+        pdf.dispose();
+      }
+      return null;
+    }
+
+    final mergedBytes = await mergedPdf.save();
+    
+    // Save to app storage
+    final directory = await getApplicationDocumentsDirectory();
+    final pdfDirectory = Directory('${directory.path}/PDFs');
+    if (!await pdfDirectory.exists()) {
+      await pdfDirectory.create(recursive: true);
+    }
+
+    final fileName = 'Merged_${DateTime.now().millisecondsSinceEpoch}.pdf';
+    var targetPath = path.join(pdfDirectory.path, fileName);
+    var targetFile = File(targetPath);
+    int counter = 1;
+    
+    while (await targetFile.exists()) {
+      final nameWithoutExt = path.basenameWithoutExtension(fileName);
+      final ext = path.extension(fileName);
+      final newFileName = '${nameWithoutExt}_$counter$ext';
+      targetPath = path.join(pdfDirectory.path, newFileName);
+      targetFile = File(targetPath);
+      counter++;
+    }
+
+    await targetFile.writeAsBytes(mergedBytes);
+    
+    mergedPdf.dispose();
+    for (var pdf in pdfsToDispose) {
+      pdf.dispose();
+    }
+
+    return targetPath;
+  } catch (e) {
+    mergedPdf?.dispose();
+    for (var pdf in pdfsToDispose) {
+      pdf.dispose();
+    }
+    print('Error merging PDFs: $e');
+    return null;
+  }
+}
+
+/// Isolate function: Compress PDF
+static Future<String?> _compressPDFIsolate(String pdfPath) async {
+  sf.PdfDocument? pdf;
+  sf.PdfDocument? compressedPdf;
+  
+  try {
+    final file = File(pdfPath);
+    if (!await file.exists()) return null;
+
+    final bytes = await file.readAsBytes();
+    pdf = sf.PdfDocument(inputBytes: bytes);
+    compressedPdf = sf.PdfDocument();
+
+    for (int i = 0; i < pdf.pages.count; i++) {
+      try {
+        final sourcePage = pdf.pages[i];
+        final newPage = compressedPdf.pages.add();
+        final template = sourcePage.createTemplate();
+        final pageSize = sourcePage.size;
+        newPage.graphics.drawPdfTemplate(
+          template,
+          const ui.Offset(0, 0),
+          ui.Size(pageSize.width, pageSize.height),
+        );
+      } catch (e) {
+        print('Error processing page $i: $e');
+        continue;
+      }
+    }
+
+    if (compressedPdf.pages.count == 0) {
+      pdf.dispose();
+      compressedPdf.dispose();
+      return null;
+    }
+
+    final compressedBytes = await compressedPdf.save();
+    
+    // Save to app storage
+    final directory = await getApplicationDocumentsDirectory();
+    final pdfDirectory = Directory('${directory.path}/PDFs');
+    if (!await pdfDirectory.exists()) {
+      await pdfDirectory.create(recursive: true);
+    }
+
+    final baseName = path.basenameWithoutExtension(pdfPath);
+    final fileName = '${baseName}_compressed.pdf';
+    var targetPath = path.join(pdfDirectory.path, fileName);
+    var targetFile = File(targetPath);
+    int counter = 1;
+    
+    while (await targetFile.exists()) {
+      final nameWithoutExt = path.basenameWithoutExtension(fileName);
+      final ext = path.extension(fileName);
+      final newFileName = '${nameWithoutExt}_$counter$ext';
+      targetPath = path.join(pdfDirectory.path, newFileName);
+      targetFile = File(targetPath);
+      counter++;
+    }
+
+    await targetFile.writeAsBytes(compressedBytes);
+    
+    pdf.dispose();
+    compressedPdf.dispose();
+
+    return targetPath;
+  } catch (e) {
+    pdf?.dispose();
+    compressedPdf?.dispose();
+    print('Error compressing PDF: $e');
+    return null;
+  }
 }
 

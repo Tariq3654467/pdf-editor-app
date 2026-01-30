@@ -11,6 +11,7 @@ import 'pdf_cache_service.dart';
 import 'pdf_preferences_service.dart';
 import 'pdf_service.dart';
 import 'pdf_storage_service.dart';
+import 'pdf_isolate_service.dart';
 import '../models/pdf_file.dart';
 
 class PDFToolsService {
@@ -99,8 +100,64 @@ class PDFToolsService {
   }
 
   // Split PDF - Split PDF into separate page files
-  // CRITICAL: This operation is CPU-intensive and must yield to UI thread
+  // CRITICAL: Uses isolate to prevent ANR with timeout protection
   static Future<List<String>> splitPDF(String pdfPath) async {
+    try {
+      // Use isolate service for heavy operation with timeout (5 minutes max)
+      final splitFiles = await PDFIsolateService.splitPDF(pdfPath)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('PDFToolsService: Split operation timed out after 5 minutes');
+              return <String>[];
+            },
+          )
+          .catchError((e, stackTrace) {
+            print('PDFToolsService: Error in split isolate: $e');
+            print('Stack trace: $stackTrace');
+            return <String>[];
+          });
+      
+      // Add to cache after splitting - CRITICAL: Must complete before returning
+      for (var filePath in splitFiles) {
+        try {
+          final file = File(filePath);
+          if (await file.exists()) {
+            final stat = await file.stat();
+            final pdfFile = PDFFile(
+              name: path.basename(filePath),
+              date: PDFService.formatDate(stat.modified),
+              size: PDFService.formatFileSize(stat.size),
+              isFavorite: false,
+              filePath: filePath,
+              lastAccessed: DateTime.now(),
+              folderPath: path.dirname(filePath),
+              folderName: 'App Files',
+              dateModified: stat.modified,
+              fileSizeBytes: stat.size,
+            );
+            // Synchronously update cache - no async gaps
+            await PDFCacheService.addPDFToCache(pdfFile);
+            await PDFPreferencesService.setLastAccessed(filePath);
+          }
+        } catch (e) {
+          print('PDFToolsService: Error adding split file to cache: $e');
+          // Continue with other files
+        }
+      }
+      
+      return splitFiles;
+    } catch (e, stackTrace) {
+      print('PDFToolsService: Fatal error in splitPDF: $e');
+      print('Stack trace: $stackTrace');
+      return <String>[];
+    }
+  }
+  
+  // OLD IMPLEMENTATION - KEPT FOR REFERENCE BUT NOT USED
+  // Split PDF - Split PDF into separate page files
+  // CRITICAL: This operation is CPU-intensive and must yield to UI thread
+  static Future<List<String>> _splitPDFOld(String pdfPath) async {
     List<String> splitFiles = [];
     try {
       final file = File(pdfPath);
@@ -164,83 +221,119 @@ class PDFToolsService {
   }
 
   // Merge PDF - Merge multiple PDFs into one
+  // CRITICAL: Uses isolate to prevent ANR with timeout protection
   static Future<String?> mergePDFs(List<String> pdfPaths) async {
     try {
       if (pdfPaths.isEmpty) return null;
-
-      final mergedPdf = sf.PdfDocument();
-
-      for (var pdfPath in pdfPaths) {
-        final file = File(pdfPath);
-        if (!await file.exists()) continue;
-
-        final bytes = await file.readAsBytes();
-        final pdf = sf.PdfDocument(inputBytes: bytes);
-
-        for (int i = 0; i < pdf.pages.count; i++) {
-          final sourcePage = pdf.pages[i];
-          final newPage = mergedPdf.pages.add();
-          // Create template from source page and draw it on new page
-          final template = sourcePage.createTemplate();
-          final pageSize = sourcePage.size;
-          newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
-        }
-
-        pdf.dispose();
-      }
-
-      if (mergedPdf.pages.count == 0) {
-        mergedPdf.dispose();
-        return null;
-      }
-
-      // Save merged PDF using storage service (ensures it's in app storage)
-      final mergedBytes = await mergedPdf.save();
-      mergedPdf.dispose();
       
-      final fileName = 'Merged_${DateTime.now().millisecondsSinceEpoch}.pdf';
-      final mergedPath = await PDFStorageService.savePDFBytes(mergedBytes, fileName);
-
+      // Use isolate service for heavy operation with timeout (5 minutes max)
+      final mergedPath = await PDFIsolateService.mergePDFs(pdfPaths)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('PDFToolsService: Merge operation timed out after 5 minutes');
+              return null;
+            },
+          )
+          .catchError((e, stackTrace) {
+            print('PDFToolsService: Error in merge isolate: $e');
+            print('Stack trace: $stackTrace');
+            return null;
+          });
+      
+      // Add to cache after merging - CRITICAL: Must complete before returning
+      if (mergedPath != null) {
+        try {
+          final file = File(mergedPath);
+          if (await file.exists()) {
+            final stat = await file.stat();
+            final pdfFile = PDFFile(
+              name: path.basename(mergedPath),
+              date: PDFService.formatDate(stat.modified),
+              size: PDFService.formatFileSize(stat.size),
+              isFavorite: false,
+              filePath: mergedPath,
+              lastAccessed: DateTime.now(),
+              folderPath: path.dirname(mergedPath),
+              folderName: 'App Files',
+              dateModified: stat.modified,
+              fileSizeBytes: stat.size,
+            );
+            // Synchronously update cache - no async gaps
+            await PDFCacheService.addPDFToCache(pdfFile);
+            await PDFPreferencesService.setLastAccessed(mergedPath);
+          } else {
+            print('PDFToolsService: Merged file does not exist at: $mergedPath');
+            return null;
+          }
+        } catch (e) {
+          print('PDFToolsService: Error adding merged file to cache: $e');
+          // Return path anyway - file exists even if cache update failed
+        }
+      }
+      
       return mergedPath;
-    } catch (e) {
-      print('Error merging PDFs: $e');
+    } catch (e, stackTrace) {
+      print('PDFToolsService: Fatal error in mergePDFs: $e');
+      print('Stack trace: $stackTrace');
       return null;
     }
   }
 
   // Compress PDF - Reduce PDF file size
+  // CRITICAL: Uses isolate to prevent ANR with timeout protection
   static Future<String?> compressPDF(String pdfPath) async {
     try {
-      final file = File(pdfPath);
-      if (!await file.exists()) return null;
-
-      final bytes = await file.readAsBytes();
-      final pdf = sf.PdfDocument(inputBytes: bytes);
-
-      // Create compressed PDF by copying pages
-      final compressedPdf = sf.PdfDocument();
-
-      for (int i = 0; i < pdf.pages.count; i++) {
-        final sourcePage = pdf.pages[i];
-        final newPage = compressedPdf.pages.add();
-        // Create template from source page and draw it on new page
-        final template = sourcePage.createTemplate();
-        final pageSize = sourcePage.size;
-        newPage.graphics.drawPdfTemplate(template, const ui.Offset(0, 0), ui.Size(pageSize.width, pageSize.height));
+      // Use isolate service for heavy operation with timeout (5 minutes max)
+      final compressedPath = await PDFIsolateService.compressPDF(pdfPath)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('PDFToolsService: Compress operation timed out after 5 minutes');
+              return null;
+            },
+          )
+          .catchError((e, stackTrace) {
+            print('PDFToolsService: Error in compress isolate: $e');
+            print('Stack trace: $stackTrace');
+            return null;
+          });
+      
+      // Add to cache after compressing - CRITICAL: Must complete before returning
+      if (compressedPath != null) {
+        try {
+          final file = File(compressedPath);
+          if (await file.exists()) {
+            final stat = await file.stat();
+            final pdfFile = PDFFile(
+              name: path.basename(compressedPath),
+              date: PDFService.formatDate(stat.modified),
+              size: PDFService.formatFileSize(stat.size),
+              isFavorite: false,
+              filePath: compressedPath,
+              lastAccessed: DateTime.now(),
+              folderPath: path.dirname(compressedPath),
+              folderName: 'App Files',
+              dateModified: stat.modified,
+              fileSizeBytes: stat.size,
+            );
+            // Synchronously update cache - no async gaps
+            await PDFCacheService.addPDFToCache(pdfFile);
+            await PDFPreferencesService.setLastAccessed(compressedPath);
+          } else {
+            print('PDFToolsService: Compressed file does not exist at: $compressedPath');
+            return null;
+          }
+        } catch (e) {
+          print('PDFToolsService: Error adding compressed file to cache: $e');
+          // Return path anyway - file exists even if cache update failed
+        }
       }
-
-      // Save compressed PDF using storage service (ensures it's in app storage)
-      final compressedBytes = await compressedPdf.save();
-      pdf.dispose();
-      compressedPdf.dispose();
-
-      final baseName = path.basenameWithoutExtension(pdfPath);
-      final fileName = '${baseName}_compressed.pdf';
-      final compressedPath = await PDFStorageService.savePDFBytes(compressedBytes, fileName);
-
+      
       return compressedPath;
-    } catch (e) {
-      print('Error compressing PDF: $e');
+    } catch (e, stackTrace) {
+      print('PDFToolsService: Fatal error in compressPDF: $e');
+      print('Stack trace: $stackTrace');
       return null;
     }
   }

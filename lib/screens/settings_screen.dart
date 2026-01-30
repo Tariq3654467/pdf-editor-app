@@ -13,7 +13,8 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   String _selectedLanguage = 'English';
-  ThemeMode _currentThemeMode = ThemeMode.system;
+  // Default to light mode - user must manually enable dark mode
+  ThemeMode _currentThemeMode = ThemeMode.light;
   
   @override
   void initState() {

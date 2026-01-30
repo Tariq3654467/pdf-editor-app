@@ -122,11 +122,13 @@ class PDFStorageService {
         fileSizeBytes: stat.size,
       );
       
-      // Add to cache
+      // Add to cache - CRITICAL: This must complete before returning
       await PDFCacheService.addPDFToCache(pdfFile);
+      print('PDFStorageService: Added PDF to cache: ${pdfFile.name}');
       
       // Mark as recently accessed
       await PDFPreferencesService.setLastAccessed(targetPath);
+      print('PDFStorageService: Marked as recently accessed: $targetPath');
       
       // Also save to external storage (Downloads) so it's visible in file manager
       // This is optional - files are already in app storage
@@ -140,6 +142,8 @@ class PDFStorageService {
       }
       
       print('PDFStorageService: Saved PDF to app storage: $targetPath');
+      print('PDFStorageService: File exists: ${await targetFile.exists()}');
+      print('PDFStorageService: File size: ${await targetFile.length()} bytes');
       return targetPath;
     } catch (e) {
       print('PDFStorageService: Error saving PDF bytes: $e');

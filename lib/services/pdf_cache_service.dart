@@ -138,6 +138,11 @@ class PDFCacheService {
   /// Add a single PDF to cache (for when user imports a new PDF)
   static Future<void> addPDFToCache(PDFFile pdf) async {
     try {
+      if (pdf.filePath == null) {
+        print('PDFCacheService: Cannot add PDF to cache - filePath is null');
+        return;
+      }
+      
       final existingPDFs = await loadPDFList();
       
       // Check if PDF already exists (by filePath)
@@ -148,14 +153,25 @@ class PDFCacheService {
       if (existingIndex >= 0) {
         // Update existing PDF
         existingPDFs[existingIndex] = pdf;
+        print('PDFCacheService: Updated existing PDF in cache: ${pdf.name}');
       } else {
-        // Add new PDF
-        existingPDFs.add(pdf);
+        // Add new PDF at the beginning (newest first)
+        existingPDFs.insert(0, pdf);
+        print('PDFCacheService: Added new PDF to cache: ${pdf.name} (total: ${existingPDFs.length})');
       }
       
+      // Sort by date (newest first) to ensure new files appear at top
+      existingPDFs.sort((a, b) {
+        final aDate = a.dateModified ?? DateTime(1970);
+        final bDate = b.dateModified ?? DateTime(1970);
+        return bDate.compareTo(aDate);
+      });
+      
       await savePDFList(existingPDFs);
+      print('PDFCacheService: Cache saved with ${existingPDFs.length} PDFs');
     } catch (e) {
       print('PDFCacheService: Error adding PDF to cache: $e');
+      rethrow; // Re-throw to help debug
     }
   }
 

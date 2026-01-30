@@ -3,7 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class ThemeService {
   static const String _themeModeKey = 'theme_mode';
-  static final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.system);
+  // Default to light mode (not system) - user must manually enable dark mode
+  static final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier<ThemeMode>(ThemeMode.light);
   
   /// Initialize theme mode notifier
   static Future<void> initialize() async {
@@ -12,13 +13,15 @@ class ThemeService {
   }
   
   /// Get current theme mode from preferences
+  /// Defaults to light mode (not system) - user must manually enable dark mode
   static Future<ThemeMode> getThemeMode() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final themeModeString = prefs.getString(_themeModeKey);
       
       if (themeModeString == null) {
-        return ThemeMode.system;
+        // Default to light mode instead of system
+        return ThemeMode.light;
       }
       
       switch (themeModeString) {

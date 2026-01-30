@@ -1532,19 +1532,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('PDFs merged successfully! File saved in app storage.'),
+              content: Text('PDFs merged successfully! File saved in app storage. Returning to file list...'),
               duration: Duration(seconds: 2),
             ),
           );
-          // Navigate to merged PDF
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (context) => PDFViewerScreen(
-                filePath: mergedPath,
-                fileName: 'Merged PDF.pdf',
-              ),
-            ),
-          );
+          
+          // Pop back to home screen so file list refreshes and shows the merged file
+          // The merged file is already in cache, so it will appear in the list
+          Navigator.of(context).pop(true); // Return true to indicate refresh needed
         }
       } else {
         if (mounted) {

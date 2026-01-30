@@ -8,6 +8,7 @@ import 'dart:io' as io;
 import 'package:image_picker/image_picker.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path/path.dart' as path;
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../painters/pdf_icon_painter.dart';
 import 'tools_screen.dart';
@@ -686,6 +687,107 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     }
   }
   
+  /// Reload PDFs after operations (split, merge, etc.)
+  /// This ensures newly created files appear in the list immediately
+  Future<void> _reloadPDFsAfterOperation() async {
+    if (!mounted) return;
+    
+    try {
+      // First, load from cache (should have new files)
+      final cachedPDFs = await PDFCacheService.loadPDFList().catchError((e) {
+        print('Error loading cache: $e');
+        return <PDFFile>[];
+      });
+      
+      // Update UI immediately with cached results
+      if (mounted) {
+        setState(() {
+          pdfFiles = cachedPDFs;
+          _isLoading = false;
+        });
+      }
+      
+      // Also scan app directory to ensure we catch any files that might not be in cache yet
+      // This is a quick scan of just the app's PDF directory
+      try {
+        final directory = await getApplicationDocumentsDirectory();
+        final pdfDirectory = io.Directory('${directory.path}/PDFs');
+        
+        if (await pdfDirectory.exists()) {
+          final files = pdfDirectory.listSync();
+          final appPDFs = <PDFFile>[];
+          final seenPaths = <String>{};
+          
+          // Add existing cached PDFs
+          for (var pdf in cachedPDFs) {
+            if (pdf.filePath != null) {
+              seenPaths.add(pdf.filePath!);
+              appPDFs.add(pdf);
+            }
+          }
+          
+          // Scan app directory for any PDFs not in cache
+          for (var file in files) {
+            if (file is io.File && file.path.toLowerCase().endsWith('.pdf')) {
+              if (!seenPaths.contains(file.path)) {
+                try {
+                  final stat = await file.stat();
+                  final fileName = path.basename(file.path);
+                  
+                  final newPDF = PDFFile(
+                    name: fileName.length > 25
+                        ? '${fileName.substring(0, 22)}...'
+                        : fileName,
+                    date: PDFService.formatDate(stat.modified),
+                    size: PDFService.formatFileSize(stat.size),
+                    isFavorite: false,
+                    filePath: file.path,
+                    lastAccessed: DateTime.now(),
+                    folderPath: pdfDirectory.path,
+                    folderName: 'App Files',
+                    dateModified: stat.modified,
+                    fileSizeBytes: stat.size,
+                  );
+                  
+                  appPDFs.add(newPDF);
+                  // Add to cache
+                  await PDFCacheService.addPDFToCache(newPDF);
+                } catch (e) {
+                  print('Error processing file ${file.path}: $e');
+                }
+              }
+            }
+          }
+          
+          // Sort by date (newest first)
+          appPDFs.sort((a, b) {
+            final aDate = a.dateModified ?? DateTime(1970);
+            final bDate = b.dateModified ?? DateTime(1970);
+            return bDate.compareTo(aDate);
+          });
+          
+          // Update UI with all PDFs
+          if (mounted) {
+            setState(() {
+              pdfFiles = appPDFs;
+              _isLoading = false;
+            });
+          }
+        }
+      } catch (e) {
+        print('Error scanning app directory: $e');
+      }
+    } catch (e, stackTrace) {
+      print('Error in _reloadPDFsAfterOperation: $e');
+      print('Stack trace: $stackTrace');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
+    }
+  }
+  
   /// Scan PDFs in background without blocking UI thread
   /// This is critical for preventing ANR on Samsung devices
   void _scanInBackground() {
@@ -1018,7 +1120,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   : ToolsScreen(
                       onOperationComplete: () {
                         // Force refresh of PDF list to show newly created files
-                        _loadPDFs(forceRescan: false);
+                        // Use special reload function that scans app directory
+                        _reloadPDFsAfterOperation();
                         _loadToolsHistory();
                       },
                     ),
@@ -1759,7 +1862,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           // Reload PDFs when returning from PDF viewer
           // This ensures newly created files (split, merge, etc.) appear in the list
           if (mounted) {
-            await _loadPDFs(forceRescan: false);
+            // Small delay to ensure cache is fully updated
+            await Future.delayed(const Duration(milliseconds: 500));
+            // Force reload from cache to get newly added files
+            // Also scan app directory to ensure new files are found
+            await _reloadPDFsAfterOperation();
           }
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2090,6 +2197,28 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 // Rename the file
                 await oldFile.rename(newPath);
 
+                // Update cache: Remove old entry and add new one
+                await PDFCacheService.removePDFFromCache(pdf.filePath!);
+                
+                // Create new PDFFile object with updated path
+                final newFile = io.File(newPath);
+                final stat = await newFile.stat();
+                final updatedPDF = PDFFile(
+                  name: path.basename(newPath),
+                  date: PDFService.formatDate(stat.modified),
+                  size: PDFService.formatFileSize(stat.size),
+                  isFavorite: pdf.isFavorite,
+                  filePath: newPath,
+                  lastAccessed: pdf.lastAccessed,
+                  folderPath: path.dirname(newPath),
+                  folderName: pdf.folderName,
+                  dateModified: stat.modified,
+                  fileSizeBytes: stat.size,
+                );
+                
+                // Add renamed file to cache
+                await PDFCacheService.addPDFToCache(updatedPDF);
+
                 // Update bookmark if file was bookmarked
                 final wasBookmarked = await PDFPreferencesService.isBookmarked(pdf.filePath!);
                 if (wasBookmarked) {
@@ -2107,7 +2236,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   }
                 }
 
-                // Reload PDFs
+                // Reload PDFs to refresh UI
                 await _loadPDFs();
 
                 if (mounted) {

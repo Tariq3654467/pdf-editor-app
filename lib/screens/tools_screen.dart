@@ -462,11 +462,21 @@ class _ToolsScreenState extends State<ToolsScreen> {
           selectedFiles.first,
           resultPath: mergedPath,
         );
-        // Trigger refresh of file list
+        
+        // Trigger refresh of file list BEFORE navigating
+        // This ensures the merged file appears in the list when user returns
         widget.onOperationComplete?.call();
         
         if (mounted) {
-          Navigator.of(context).push(
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDFs merged successfully! File saved in app storage and will appear in your file list.'),
+              duration: Duration(seconds: 3),
+            ),
+          );
+          
+          // Navigate to merged PDF (optional - user can view it)
+          final result = await Navigator.of(context).push(
             MaterialPageRoute(
               builder: (context) => PDFViewerScreen(
                 filePath: mergedPath,
@@ -474,71 +484,17 @@ class _ToolsScreenState extends State<ToolsScreen> {
               ),
             ),
           );
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('PDFs merged successfully! File saved in app storage and will appear in your file list.'),
-              duration: Duration(seconds: 3),
-            ),
-          );
+          
+          // Refresh file list when returning from PDF viewer
+          if (result == true || mounted) {
+            widget.onOperationComplete?.call();
+          }
         }
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isProcessing = false);
-      }
-    }
-  }
-
-  Future<void> _annotatePDF() async {
-    final filePath = await PDFService.pickPDFFile();
-    if (filePath != null && mounted) {
-      Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (context) => PDFViewerScreen(
-            filePath: filePath,
-            fileName: 'Annotate PDF',
-          ),
-        ),
-      );
-    }
-  }
-
-  Future<void> _compressPDF() async {
-    if (_isProcessing) return;
-
-    final filePath = await PDFService.pickPDFFile();
-    if (filePath == null) return;
-
-    setState(() => _isProcessing = true);
-
-    try {
-      final compressedPath = await PDFToolsService.compressPDF(filePath);
-      if (compressedPath != null) {
-        // Save to history
-        await PDFPreferencesService.addToolsHistory(
-          'compress',
-          filePath,
-          resultPath: compressedPath,
-        );
-        widget.onOperationComplete?.call();
+      } else {
         if (mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => PDFViewerScreen(
-                filePath: compressedPath,
-                fileName: 'Compressed PDF.pdf',
-              ),
-            ),
-          );
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('PDF compressed successfully'),
+              content: Text('Failed to merge PDFs. Please try again.'),
               duration: Duration(seconds: 2),
             ),
           );
@@ -557,64 +513,184 @@ class _ToolsScreenState extends State<ToolsScreen> {
     }
   }
 
+  Future<void> _annotatePDF() async {
+    // Use in-app file picker instead of system file manager
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: false,
+          title: 'Select PDF to Annotate',
+        ),
+      ),
+    );
+
+    if (selectedFiles != null && selectedFiles.isNotEmpty && mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => PDFViewerScreen(
+            filePath: selectedFiles.first,
+            fileName: 'Annotate PDF',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _compressPDF() async {
+    if (_isProcessing) return;
+
+    // Use in-app file picker instead of system file manager
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: false,
+          title: 'Select PDF to Compress',
+        ),
+      ),
+    );
+
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
+
+    final filePath = selectedFiles.first;
+    setState(() => _isProcessing = true);
+
+    try {
+      // Show loading indicator
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+
+      final compressedPath = await PDFToolsService.compressPDF(filePath);
+
+      // Close loading dialog
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
+      if (compressedPath != null) {
+        // Save to history
+        await PDFPreferencesService.addToolsHistory(
+          'compress',
+          filePath,
+          resultPath: compressedPath,
+        );
+        widget.onOperationComplete?.call();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF compressed successfully! File saved in app storage.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PDFViewerScreen(
+                filePath: compressedPath,
+                fileName: 'Compressed PDF.pdf',
+              ),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to compress PDF. Please try again.'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      // Close loading dialog on error
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
   Future<void> _createZIPFile() async {
     if (_isProcessing) return;
 
-    final List<String> pdfPaths = [];
-    
-    // Pick multiple PDFs
-    while (true) {
-      final filePath = await PDFService.pickPDFFile();
-      if (filePath == null) break;
-      pdfPaths.add(filePath);
+    // Use in-app file picker with multi-select instead of system file manager
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: true,
+          title: 'Select PDFs to Create ZIP',
+        ),
+      ),
+    );
 
-      if (mounted) {
-        final continuePicking = await showDialog<bool>(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Add More PDFs?'),
-            content: Text('${pdfPaths.length} PDF(s) selected. Add more?'),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('Done'),
-              ),
-              TextButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('Add More'),
-              ),
-            ],
-          ),
-        );
-
-        if (continuePicking != true) break;
-      }
-    }
-
-    if (pdfPaths.isEmpty) return;
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
 
     setState(() => _isProcessing = true);
 
     try {
-      final zipPath = await PDFToolsService.createZIPFile(pdfPaths);
+      // Show loading indicator
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
+
+      final zipPath = await PDFToolsService.createZIPFile(selectedFiles);
+
+      // Close loading dialog
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
+
       if (zipPath != null) {
         // Save to history
         await PDFPreferencesService.addToolsHistory(
           'zip',
-          pdfPaths.first,
+          selectedFiles.first,
           resultPath: zipPath,
         );
         widget.onOperationComplete?.call();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text('ZIP file created: ${path.basename(zipPath)}'),
+              content: Text('ZIP file created: ${path.basename(zipPath)}. File saved in app storage.'),
               duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Failed to create ZIP file. Please try again.'),
+              duration: Duration(seconds: 2),
             ),
           );
         }
       }
     } catch (e) {
+      // Close loading dialog on error
+      if (mounted && Navigator.canPop(context)) {
+        Navigator.pop(context);
+      }
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
@@ -628,11 +704,34 @@ class _ToolsScreenState extends State<ToolsScreen> {
   }
 
   Future<void> _printPDF() async {
-    final filePath = await PDFService.pickPDFFile();
-    if (filePath == null) return;
+    // Use in-app file picker instead of system file manager
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: false,
+          title: 'Select PDF to Print',
+        ),
+      ),
+    );
+
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
+
+    final filePath = selectedFiles.first;
 
     try {
       final file = File(filePath);
+      if (!await file.exists()) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF file not found'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+        return;
+      }
+      
       final bytes = await file.readAsBytes();
       
       await Printing.layoutPdf(

@@ -18,7 +18,8 @@ class MyApp extends StatefulWidget {
 class _MyAppState extends State<MyApp> {
   static const platform = MethodChannel('com.example.pdf_editor_app/file_intent');
   String? _initialFilePath;
-  ThemeMode _themeMode = ThemeMode.system;
+  // Default to light mode - user must manually enable dark mode
+  ThemeMode _themeMode = ThemeMode.light;
 
   @override
   void initState() {

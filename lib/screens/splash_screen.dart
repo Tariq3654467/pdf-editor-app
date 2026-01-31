@@ -1675,9 +1675,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
-              crossAxisSpacing: 8, // Further reduced spacing
-              mainAxisSpacing: 8, // Further reduced spacing
-              childAspectRatio: 0.65, // Even more compact cards (taller)
+              crossAxisSpacing: 6, // Further reduced spacing
+              mainAxisSpacing: 6, // Further reduced spacing
+              childAspectRatio: 0.55, // Much smaller cards (taller/narrower)
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
@@ -2105,12 +2105,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         decoration: BoxDecoration(
           // Cards stay white even in dark mode to match reference design
           color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
+          borderRadius: BorderRadius.circular(8), // Further reduced from 10
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.08),
-              blurRadius: 6,
-              offset: const Offset(0, 2),
+              color: Colors.black.withOpacity(0.05), // Further reduced opacity
+              blurRadius: 3, // Further reduced from 4
+              offset: const Offset(0, 1),
             ),
           ],
         ),
@@ -2119,7 +2119,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           children: [
             // Top section: Red PDF preview area (very compact)
             Expanded(
-              flex: 2, // Keep same ratio
+              flex: 2, // Reduced from 3 to make red area smaller
               child: Stack(
                 children: [
                   // Red PDF Icon Container
@@ -2219,10 +2219,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             ),
             // Bottom section: White background with file info (very compact)
             Expanded(
-              flex: 2, // Keep same ratio
+              flex: 2, // Increased from 1 to balance with smaller red area
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5), // Further reduced padding
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), // Further reduced vertical padding
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.only(
@@ -2248,7 +2248,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         ),
                       ),
                     ),
-                    const SizedBox(height: 4),
+                    const SizedBox(height: 3), // Reduced from 4
                     // Date • file size and options menu button
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -2261,8 +2261,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: Color(0xFF9E9E9E),
-                              fontSize: 10, // Reduced from 11
-                              height: 1.1, // Reduced from 1.2
+                              fontSize: 9, // Further reduced from 10
+                              height: 1.05, // Further reduced from 1.1
                             ),
                           ),
                         ),

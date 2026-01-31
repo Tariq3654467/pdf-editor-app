@@ -10,6 +10,7 @@ import '../services/pdf_preferences_service.dart';
 import '../widgets/in_app_file_picker.dart';
 import 'pdf_viewer_screen.dart';
 import 'merge_pdf_screen.dart';
+import 'split_pdf_page_selection_screen.dart';
 
 class ToolsScreen extends StatefulWidget {
   final VoidCallback? onOperationComplete;
@@ -301,6 +302,38 @@ class _ToolsScreenState extends State<ToolsScreen> {
   }
 
   Future<void> _splitPDF() async {
+    if (_isProcessing) return;
+
+    // Show in-app file picker
+    final selectedFiles = await Navigator.of(context).push<List<String>>(
+      MaterialPageRoute(
+        builder: (context) => const InAppFilePicker(
+          allowMultiSelect: false,
+          title: 'Select PDF to Split',
+        ),
+      ),
+    );
+
+    if (selectedFiles == null || selectedFiles.isEmpty) return;
+    final filePath = selectedFiles.first;
+
+    // Navigate to page selection screen
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (context) => SplitPDFPageSelectionScreen(
+          pdfPath: filePath,
+          fileName: path.basename(filePath),
+        ),
+      ),
+    );
+
+    // Refresh file list when returning from split screen
+    if (result == true && mounted) {
+      widget.onOperationComplete?.call();
+    }
+  }
+
+  Future<void> _splitPDFOld() async {
     if (_isProcessing) return;
 
     // Show in-app file picker

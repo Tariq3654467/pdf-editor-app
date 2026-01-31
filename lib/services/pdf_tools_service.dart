@@ -101,6 +101,74 @@ class PDFToolsService {
 
   // Split PDF - Split PDF into separate page files
   // CRITICAL: Uses isolate to prevent ANR with timeout protection
+  // Split PDF - Split only selected pages
+  static Future<List<String>> splitPDFPages(String pdfPath, List<int> selectedPageIndices) async {
+    try {
+      // Get directory path in main isolate before passing to compute
+      final directory = await getApplicationDocumentsDirectory();
+      final pdfDirectory = Directory('${directory.path}/PDFs');
+      if (!await pdfDirectory.exists()) {
+        await pdfDirectory.create(recursive: true);
+      }
+      
+      // Pass pdfPath, outputDirectory, and selected pages to isolate
+      final splitRequest = SplitPDFRequest(
+        pdfPath: pdfPath,
+        outputDirectory: pdfDirectory.path,
+        selectedPageIndices: selectedPageIndices,
+      );
+      
+      // Use isolate service for heavy operation with timeout (5 minutes max)
+      final splitFiles = await PDFIsolateService.splitPDFPages(splitRequest)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('PDFToolsService: Split operation timed out after 5 minutes');
+              return <String>[];
+            },
+          )
+          .catchError((e, stackTrace) {
+            print('PDFToolsService: Error in split isolate: $e');
+            print('Stack trace: $stackTrace');
+            return <String>[];
+          });
+      
+      // Add to cache after splitting - CRITICAL: Must complete before returning
+      for (var filePath in splitFiles) {
+        try {
+          final file = File(filePath);
+          if (await file.exists()) {
+            final stat = await file.stat();
+            final pdfFile = PDFFile(
+              name: path.basename(filePath),
+              date: PDFService.formatDate(stat.modified),
+              size: PDFService.formatFileSize(stat.size),
+              isFavorite: false,
+              filePath: filePath,
+              lastAccessed: DateTime.now(),
+              folderPath: path.dirname(filePath),
+              folderName: 'App Files',
+              dateModified: stat.modified,
+              fileSizeBytes: stat.size,
+            );
+            // Synchronously update cache - no async gaps
+            await PDFCacheService.addPDFToCache(pdfFile);
+            await PDFPreferencesService.setLastAccessed(filePath);
+          }
+        } catch (e) {
+          print('PDFToolsService: Error adding split file to cache: $e');
+          // Continue with other files
+        }
+      }
+      
+      return splitFiles;
+    } catch (e, stackTrace) {
+      print('PDFToolsService: Fatal error in splitPDFPages: $e');
+      print('Stack trace: $stackTrace');
+      return <String>[];
+    }
+  }
+
   static Future<List<String>> splitPDF(String pdfPath) async {
     try {
       // Use isolate service for heavy operation with timeout (5 minutes max)

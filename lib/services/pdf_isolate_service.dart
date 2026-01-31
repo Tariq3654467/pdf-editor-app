@@ -35,7 +35,7 @@ class PDFIsolateService {
     return await compute(_parsePDFIsolate, filePath);
   }
 
-  /// Split PDF in isolate - CRITICAL: Prevents ANR
+  /// Split PDF in isolate - CRITICAL: Prevents ANR (splits all pages)
   static Future<List<String>> splitPDF(String pdfPath) async {
     // Get directory path in main isolate before passing to compute
     final directory = await getApplicationDocumentsDirectory();
@@ -44,13 +44,19 @@ class PDFIsolateService {
       await pdfDirectory.create(recursive: true);
     }
     
-    // Pass both pdfPath and outputDirectory to isolate
+    // Pass both pdfPath and outputDirectory to isolate (null = split all pages)
     final splitRequest = SplitPDFRequest(
       pdfPath: pdfPath,
       outputDirectory: pdfDirectory.path,
+      selectedPageIndices: null, // Split all pages
     );
     
     return await compute(_splitPDFIsolate, splitRequest);
+  }
+
+  /// Split selected PDF pages in isolate - CRITICAL: Prevents ANR
+  static Future<List<String>> splitPDFPages(SplitPDFRequest request) async {
+    return await compute(_splitPDFIsolate, request);
   }
 
   /// Merge PDFs in isolate - CRITICAL: Prevents ANR
@@ -321,10 +327,12 @@ class PDFPageData {
 class SplitPDFRequest {
   final String pdfPath;
   final String outputDirectory;
+  final List<int>? selectedPageIndices; // null means split all pages
   
   SplitPDFRequest({
     required this.pdfPath,
     required this.outputDirectory,
+    this.selectedPageIndices,
   });
 }
 
@@ -365,7 +373,21 @@ Future<List<String>> _splitPDFIsolate(SplitPDFRequest request) async {
     final totalPages = pdf.pages.count;
     final baseName = path.basenameWithoutExtension(request.pdfPath);
 
-    for (int i = 0; i < totalPages; i++) {
+    // Determine which pages to split
+    final pagesToSplit = request.selectedPageIndices ?? 
+        List.generate(totalPages, (index) => index);
+    
+    // Sort pages to process in order
+    pagesToSplit.sort();
+
+    for (final pageIndex in pagesToSplit) {
+      // Validate page index
+      if (pageIndex < 0 || pageIndex >= totalPages) {
+        print('Invalid page index: $pageIndex (total pages: $totalPages)');
+        continue;
+      }
+      
+      final i = pageIndex;
       try {
         final singlePagePdf = sf.PdfDocument();
         final sourcePage = pdf.pages[i];

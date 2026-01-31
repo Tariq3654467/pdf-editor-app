@@ -1609,11 +1609,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     final paginatedPDFs = _getPaginatedPDFs();
     
-    // Calculate responsive grid columns
-    final screenWidth = MediaQuery.of(context).size.width;
-    final crossAxisCount = screenWidth > 600 ? (screenWidth > 900 ? 4 : 3) : 2;
-    final spacing = 8.0;
-    final aspectRatio = 0.75; // Width/Height ratio for cards
+    // Fixed 2-column grid layout to match reference design
+    final crossAxisCount = 2;
+    final spacing = 8.0; // Reduced spacing to fit more files on screen
+    final aspectRatio = 0.65; // Optimized for card proportions (60% top, 40% bottom)
     
     return CustomScrollView(
       controller: _scrollController,
@@ -1828,59 +1827,78 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     final paginatedFolders = folders.take(endIndex).toList();
     final hasMore = folders.length > endIndex;
     
-    return ListView(
+    // Calculate responsive grid columns
+    final screenWidth = MediaQuery.of(context).size.width;
+    final crossAxisCount = screenWidth > 600 ? (screenWidth > 900 ? 4 : 3) : 2;
+    final spacing = 10.0; // Match main grid spacing
+    final aspectRatio = 0.70; // Match main grid aspect ratio
+    
+    return CustomScrollView(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 8,
-      ),
-      children: [
+      slivers: [
         ...paginatedFolders.map((folder) {
-          return Container(
-            margin: const EdgeInsets.only(bottom: 16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Theme.of(context).dividerColor.withOpacity(0.5),
-              ),
-            ),
-            child: ExpansionTile(
-              leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
-              title: Text(
-                folder.folderName,
-                style: TextStyle(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.white
-                      : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600,
+          return SliverToBoxAdapter(
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withOpacity(0.5),
                 ),
               ),
-              subtitle: Text(
-                '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
-                style: TextStyle(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? Colors.white70
-                      : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
-                  fontSize: 12,
+              child: ExpansionTile(
+                leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
+                title: Text(
+                  folder.folderName,
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white
+                        : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
                 ),
+                subtitle: Text(
+                  '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
+                  style: TextStyle(
+                    color: Theme.of(context).brightness == Brightness.dark
+                        ? Colors.white70
+                        : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
+                    fontSize: 12,
+                  ),
+                ),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.all(8.0),
+                    child: GridView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: crossAxisCount,
+                        crossAxisSpacing: spacing,
+                        mainAxisSpacing: spacing,
+                        childAspectRatio: aspectRatio,
+                      ),
+                      itemCount: folder.pdfs.length,
+                      itemBuilder: (context, index) {
+                        return _buildPDFGridCard(folder.pdfs[index]);
+                      },
+                    ),
+                  ),
+                ],
               ),
-              children: folder.pdfs.map((pdf) {
-                return Padding(
-                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
-                  child: _buildPDFTile(pdf, isNested: true),
-                );
-              }).toList(),
             ),
           );
-        }),
+        }).toList(),
         if (hasMore)
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                ),
               ),
             ),
           ),
@@ -1971,12 +1989,13 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       },
       child: Container(
         decoration: BoxDecoration(
+          // Cards stay white even in dark mode to match reference design
           color: Colors.white,
           borderRadius: BorderRadius.circular(12),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 4,
+              color: Colors.black.withOpacity(0.08),
+              blurRadius: 6,
               offset: const Offset(0, 2),
             ),
           ],
@@ -1984,12 +2003,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // PDF Icon and Favorite button
+            // PDF Icon section (larger area at top)
             Expanded(
-              flex: 3,
+              flex: 4,
               child: Stack(
                 children: [
-                  // PDF Icon Container
+                  // Red PDF Icon Container
                   Container(
                     width: double.infinity,
                     decoration: const BoxDecoration(
@@ -2005,15 +2024,15 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
-                          fontSize: 16,
+                          fontSize: 18,
                         ),
                       ),
                     ),
                   ),
-                  // Favorite button (top right)
+                  // Favorite/Star button (top right corner of card)
                   Positioned(
-                    top: 4,
-                    right: 4,
+                    top: 6,
+                    right: 6,
                     child: GestureDetector(
                       onTap: () async {
                         final newBookmarkStatus = !pdf.isFavorite;
@@ -2034,15 +2053,22 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         });
                       },
                       child: Container(
-                        padding: const EdgeInsets.all(4),
+                        padding: const EdgeInsets.all(5),
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.9),
+                          color: Colors.white,
                           shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 2,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
                         ),
                         child: Icon(
                           pdf.isFavorite ? Icons.star : Icons.star_outline,
                           color: const Color(0xFFE53935),
-                          size: 16,
+                          size: 18,
                         ),
                       ),
                     ),
@@ -2050,35 +2076,39 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 ],
               ),
             ),
-            // File info section
+            // File info section (compact at bottom)
             Expanded(
-              flex: 2,
+              flex: 3,
               child: Padding(
-                padding: const EdgeInsets.all(8.0),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // File name
-                    Text(
-                      pdf.name,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF263238),
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                        height: 1.2,
+                    // File name (2 lines max)
+                    Expanded(
+                      child: Text(
+                        pdf.name,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Color(0xFF263238), // Dark text for visibility on white cards
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
+                          height: 1.3,
+                        ),
                       ),
                     ),
-                    // Date and size
+                    const SizedBox(height: 4),
+                    // Date and size (single line)
                     Text(
                       '${pdf.date} • ${pdf.size}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        color: Color(0xFF9E9E9E),
-                        fontSize: 10,
+                        color: Color(0xFF9E9E9E), // Grey text for metadata
+                        fontSize: 11,
+                        height: 1.2,
                       ),
                     ),
                   ],

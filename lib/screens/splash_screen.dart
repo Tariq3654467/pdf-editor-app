@@ -1609,70 +1609,92 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     final paginatedPDFs = _getPaginatedPDFs();
     
-    return ListView(
+    // Calculate responsive grid columns
+    final screenWidth = MediaQuery.of(context).size.width;
+    final crossAxisCount = screenWidth > 600 ? (screenWidth > 900 ? 4 : 3) : 2;
+    final spacing = 8.0;
+    final aspectRatio = 0.75; // Width/Height ratio for cards
+    
+    return CustomScrollView(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 8,
-      ),
-      children: [
+      slivers: [
         // Tools History Section (only on "My file" tab)
         if (_selectedTabIndex == 0 && _toolsHistory.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Theme.of(context).dividerColor.withOpacity(0.5),
+          SliverToBoxAdapter(
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withOpacity(0.5),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Recent Tools Activity',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await PDFPreferencesService.clearToolsHistory();
+                          await _loadToolsHistory();
+                        },
+                        child: const Text(
+                          'Clear',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
+                ],
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Recent Tools Activity',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await PDFPreferencesService.clearToolsHistory();
-                        await _loadToolsHistory();
-                      },
-                      child: const Text(
-                        'Clear',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
-              ],
+          ),
+        // PDF Grid (paginated)
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          sliver: SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: spacing,
+              mainAxisSpacing: spacing,
+              childAspectRatio: aspectRatio,
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                if (index >= paginatedPDFs.length) {
+                  return null;
+                }
+                return _buildPDFGridCard(paginatedPDFs[index]);
+              },
+              childCount: paginatedPDFs.length,
             ),
           ),
-        // PDF List (paginated)
-        ...paginatedPDFs.map((pdf) => Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _buildPDFTile(pdf),
-        )),
+        ),
         // Load more indicator
         if (_hasMoreItems())
-          Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                ),
               ),
             ),
           ),
@@ -1912,6 +1934,161 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         ),
       );
     }).toList();
+  }
+
+  Widget _buildPDFGridCard(PDFFile pdf) {
+    return GestureDetector(
+      onTap: () async {
+        if (pdf.filePath != null) {
+          // Ensure PDF is in app storage (copy if external)
+          final filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+          
+          // Track that this PDF was accessed
+          await PDFPreferencesService.setLastAccessed(filePath);
+          
+          // Navigate to PDF viewer
+          final result = await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PDFViewerScreen(
+                filePath: filePath,
+                fileName: pdf.name,
+              ),
+            ),
+          );
+          
+          // Reload PDFs when returning from PDF viewer
+          if (mounted) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            await _reloadPDFsAfterOperation();
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF file path not available'),
+            ),
+          );
+        }
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // PDF Icon and Favorite button
+            Expanded(
+              flex: 3,
+              child: Stack(
+                children: [
+                  // PDF Icon Container
+                  Container(
+                    width: double.infinity,
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFE53935),
+                      borderRadius: BorderRadius.only(
+                        topLeft: Radius.circular(12),
+                        topRight: Radius.circular(12),
+                      ),
+                    ),
+                    child: const Center(
+                      child: Text(
+                        'PDF',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // Favorite button (top right)
+                  Positioned(
+                    top: 4,
+                    right: 4,
+                    child: GestureDetector(
+                      onTap: () async {
+                        final newBookmarkStatus = !pdf.isFavorite;
+                        
+                        if (pdf.filePath != null) {
+                          await PDFPreferencesService.setBookmark(
+                            pdf.filePath!,
+                            newBookmarkStatus,
+                          );
+                        }
+                        
+                        setState(() {
+                          final index = pdfFiles.indexWhere((p) => p.filePath == pdf.filePath);
+                          if (index != -1) {
+                            pdfFiles[index].isFavorite = newBookmarkStatus;
+                            PDFCacheService.updatePDFInCache(pdfFiles[index]);
+                          }
+                        });
+                      },
+                      child: Container(
+                        padding: const EdgeInsets.all(4),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withOpacity(0.9),
+                          shape: BoxShape.circle,
+                        ),
+                        child: Icon(
+                          pdf.isFavorite ? Icons.star : Icons.star_outline,
+                          color: const Color(0xFFE53935),
+                          size: 16,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            // File info section
+            Expanded(
+              flex: 2,
+              child: Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    // File name
+                    Text(
+                      pdf.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF263238),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                        height: 1.2,
+                      ),
+                    ),
+                    // Date and size
+                    Text(
+                      '${pdf.date} • ${pdf.size}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        color: Color(0xFF9E9E9E),
+                        fontSize: 10,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _buildPDFTile(PDFFile pdf, {bool isNested = false}) {

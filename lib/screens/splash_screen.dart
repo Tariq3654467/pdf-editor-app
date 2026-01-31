@@ -2720,20 +2720,28 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     try {
       actualFilePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
       
-      // Verify the file exists
-      if (actualFilePath != null) {
+      // Verify the file exists and is accessible
+      if (actualFilePath != null && actualFilePath.isNotEmpty) {
         final file = io.File(actualFilePath);
         if (!await file.exists()) {
+          print('SplashScreen: File does not exist after ensureInAppStorage: $actualFilePath');
           actualFilePath = null;
+        } else {
+          print('SplashScreen: File verified to exist: $actualFilePath');
         }
+      } else {
+        print('SplashScreen: ensureInAppStorage returned null or empty path');
+        actualFilePath = null;
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      print('SplashScreen: Error in ensureInAppStorage: $e');
+      print('SplashScreen: Stack trace: $stackTrace');
       if (mounted) {
         Navigator.pop(context); // Close loading dialog
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Error accessing PDF file: $e',
+              'Error accessing PDF file. Please try again.',
               style: TextStyle(
                 color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
               ),
@@ -2757,7 +2765,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'PDF file not found or cannot be accessed',
+              'PDF file not found or cannot be accessed. The file may have been moved or deleted.',
               style: TextStyle(
                 color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
               ),

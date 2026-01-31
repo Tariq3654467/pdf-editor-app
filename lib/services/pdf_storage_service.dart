@@ -120,11 +120,20 @@ class PDFStorageService {
   /// Returns the new path in app storage
   static Future<String?> copyToAppStorage(String sourcePath) async {
     try {
-      // Handle content URIs
+      // Handle content URIs FIRST - before any File operations
       if (sourcePath.startsWith('content://')) {
-        return await _copyContentUriToAppStorage(sourcePath);
+        print('PDFStorageService: Detected content URI, copying: $sourcePath');
+        final result = await _copyContentUriToAppStorage(sourcePath);
+        if (result != null) {
+          print('PDFStorageService: Successfully copied content URI to: $result');
+          return result;
+        } else {
+          print('PDFStorageService: Failed to copy content URI: $sourcePath');
+          return null;
+        }
       }
       
+      // For regular file paths, check if file exists
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
         print('PDFStorageService: Source file does not exist: $sourcePath');
@@ -281,22 +290,43 @@ class PDFStorageService {
   /// Ensure PDF is in app storage (copy if not)
   static Future<String> ensureInAppStorage(String filePath) async {
     try {
-      // Check if already in app storage
+      print('PDFStorageService: ensureInAppStorage called with: $filePath');
+      
+      // For content URIs, always copy to app storage (don't check isInAppStorage)
+      if (filePath.startsWith('content://')) {
+        print('PDFStorageService: Content URI detected, copying to app storage');
+        final newPath = await copyToAppStorage(filePath);
+        if (newPath != null && newPath.isNotEmpty) {
+          print('PDFStorageService: Content URI copied successfully: $newPath');
+          return newPath;
+        } else {
+          print('PDFStorageService: WARNING - Failed to copy content URI, returning original');
+          // Don't return content URI as fallback - it won't work for file operations
+          throw Exception('Failed to copy content URI to app storage');
+        }
+      }
+      
+      // Check if already in app storage (for regular file paths)
       if (await isInAppStorage(filePath)) {
+        print('PDFStorageService: File already in app storage: $filePath');
         return filePath;
       }
       
-      // Copy to app storage
+      // Copy to app storage for regular file paths
+      print('PDFStorageService: Copying regular file path to app storage');
       final newPath = await copyToAppStorage(filePath);
-      if (newPath != null) {
+      if (newPath != null && newPath.isNotEmpty) {
+        print('PDFStorageService: File copied successfully: $newPath');
         return newPath;
       }
       
       // If copy failed, return original path (fallback)
+      print('PDFStorageService: Copy failed, returning original path: $filePath');
       return filePath;
-    } catch (e) {
+    } catch (e, stackTrace) {
       print('PDFStorageService: Error ensuring in app storage: $e');
-      return filePath;
+      print('PDFStorageService: Stack trace: $stackTrace');
+      rethrow; // Re-throw so callers can handle the error
     }
   }
   

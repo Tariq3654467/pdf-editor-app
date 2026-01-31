@@ -1827,11 +1827,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     final paginatedFolders = folders.take(endIndex).toList();
     final hasMore = folders.length > endIndex;
     
-    // Calculate responsive grid columns
-    final screenWidth = MediaQuery.of(context).size.width;
-    final crossAxisCount = screenWidth > 600 ? (screenWidth > 900 ? 4 : 3) : 2;
-    final spacing = 10.0; // Match main grid spacing
-    final aspectRatio = 0.70; // Match main grid aspect ratio
+    // Fixed 2-column grid layout to match reference design
+    final crossAxisCount = 2;
+    final spacing = 8.0; // Reduced spacing to match main grid
+    final aspectRatio = 0.65; // Match main grid aspect ratio
     
     return CustomScrollView(
       controller: _scrollController,
@@ -2003,9 +2002,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // PDF Icon section (larger area at top)
+            // Top section: Red PDF preview area (≈60%)
             Expanded(
-              flex: 4,
+              flex: 3, // 60% of card height
               child: Stack(
                 children: [
                   // Red PDF Icon Container
@@ -2029,7 +2028,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       ),
                     ),
                   ),
-                  // Favorite/Star button (top right corner of card)
+                  // Favorite/Star button (top right corner)
                   Positioned(
                     top: 6,
                     right: 6,
@@ -2073,26 +2072,61 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       ),
                     ),
                   ),
+                  // Options menu button (top left corner)
+                  Positioned(
+                    top: 6,
+                    left: 6,
+                    child: GestureDetector(
+                      onTap: () => _showPDFOptionsMenu(context, pdf),
+                      child: Container(
+                        padding: const EdgeInsets.all(5),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.1),
+                              blurRadius: 2,
+                              offset: const Offset(0, 1),
+                            ),
+                          ],
+                        ),
+                        child: Icon(
+                          Icons.more_vert,
+                          color: const Color(0xFFE53935),
+                          size: 18,
+                        ),
+                      ),
+                    ),
+                  ),
                 ],
               ),
             ),
-            // File info section (compact at bottom)
+            // Bottom section: White background with file info (≈40%)
             Expanded(
-              flex: 3,
-              child: Padding(
+              flex: 2, // 40% of card height
+              child: Container(
+                width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.only(
+                    bottomLeft: Radius.circular(12),
+                    bottomRight: Radius.circular(12),
+                  ),
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    // File name (2 lines max)
-                    Expanded(
+                    // PDF filename (1-2 lines max)
+                    Flexible(
                       child: Text(
                         pdf.name,
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
-                          color: Color(0xFF263238), // Dark text for visibility on white cards
+                          color: Color(0xFF263238),
                           fontSize: 13,
                           fontWeight: FontWeight.w500,
                           height: 1.3,
@@ -2100,16 +2134,36 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                       ),
                     ),
                     const SizedBox(height: 4),
-                    // Date and size (single line)
-                    Text(
-                      '${pdf.date} • ${pdf.size}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Color(0xFF9E9E9E), // Grey text for metadata
-                        fontSize: 11,
-                        height: 1.2,
-                      ),
+                    // Date • file size and options menu button
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: Text(
+                            '${pdf.date} • ${pdf.size}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              color: Color(0xFF9E9E9E),
+                              fontSize: 11,
+                              height: 1.2,
+                            ),
+                          ),
+                        ),
+                        // Options menu button
+                        GestureDetector(
+                          onTap: () => _showPDFOptionsMenu(context, pdf),
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            child: Icon(
+                              Icons.more_vert,
+                              color: const Color(0xFF9E9E9E),
+                              size: 16,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ],
                 ),

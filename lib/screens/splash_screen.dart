@@ -1130,7 +1130,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                               ),
                             );
                           },
-                          icon: const Icon(Icons.settings, color: Colors.white),
+                          icon: const Icon(Icons.settings, color: Color(0xFF9E9E9E)), // Gray color to match image
                           tooltip: 'Settings',
                         ),
                       ],
@@ -1383,14 +1383,18 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             horizontal: 20,
             vertical: 16,
           ),
-          child: Row(
-            children: [
-              _buildTab('My file', 0),
-              const SizedBox(width: 20),
-              _buildTab('Recent', 1),
-              const SizedBox(width: 20),
-              _buildTab('Bookmarks', 2),
-            ],
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _buildTab('My file', 0),
+                const SizedBox(width: 20),
+                _buildTab('Recent', 1),
+                const SizedBox(width: 20),
+                _buildTab('Bookmarks', 2),
+              ],
+            ),
           ),
         ),
         // Document Count and Actions
@@ -1405,10 +1409,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               Flexible(
                 child: Text(
                   '${_getFilteredPDFs().length} ${_getFilteredPDFs().length == 1 ? 'Document' : 'Documents'}',
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white
-                        : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
+                  style: const TextStyle(
+                    color: Color(0xFF263238), // Dark gray to match image
                     fontSize: 20,
                     fontWeight: FontWeight.bold,
                   ),
@@ -1609,16 +1611,6 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     final paginatedPDFs = _getPaginatedPDFs();
     
-    // Calculate crossAxisCount based on screen width (responsive)
-    final screenWidth = MediaQuery.of(context).size.width;
-    int crossAxisCount = 3; // Increased from 2 to show more cards (3 columns on phones)
-    if (screenWidth > 600) {
-      crossAxisCount = 4; // Tablets (4 columns)
-    }
-    if (screenWidth > 900) {
-      crossAxisCount = 5; // Large tablets (5 columns)
-    }
-    
     return CustomScrollView(
       controller: _scrollController,
       slivers: [
@@ -1669,22 +1661,16 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               ),
             ),
           ),
-        // PDF Grid (horizontal grid layout with smaller cards)
+        // PDF List (vertical list layout with horizontal text)
         SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          sliver: SliverGrid(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: crossAxisCount,
-              crossAxisSpacing: 4, // Further reduced spacing
-              mainAxisSpacing: 4, // Further reduced spacing
-              childAspectRatio: 0.45, // Much smaller cards to fit 6+ on screen
-            ),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12), // Proper list padding
+          sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) {
                 if (index >= paginatedPDFs.length) {
                   return null;
                 }
-                return _buildPDFGridCard(paginatedPDFs[index]);
+                return _buildPDFTile(paginatedPDFs[index]);
               },
               childCount: paginatedPDFs.length,
             ),
@@ -2329,19 +2315,27 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         }
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: const EdgeInsets.only(bottom: 16), // Clear, consistent spacing between cards
         decoration: BoxDecoration(
-          color: Colors.white, // Keep cards white for better visibility
-          borderRadius: BorderRadius.circular(12),
+          color: Colors.white, // White cards to match image
+          borderRadius: BorderRadius.circular(12), // Slightly rounded corners to match image
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: ListTile(
-          contentPadding: const EdgeInsets.all(12),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), // Reduced padding for smaller cards
+          dense: true, // Make ListTile more compact
           leading: Container(
-            width: 50,
-            height: 50,
-            decoration: BoxDecoration(
-              color: const Color(0xFFE53935),
-              borderRadius: BorderRadius.circular(8),
+            width: 40,
+            height: 40,
+            decoration: const BoxDecoration(
+              color: Color(0xFFE53935), // Red square to match image
+              // No border radius for perfect square
             ),
             child: const Center(
               child: Text(
@@ -2349,7 +2343,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.bold,
-                  fontSize: 12,
+                  fontSize: 10,
                 ),
               ),
             ),
@@ -2360,17 +2354,15 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               color: Color(0xFF263238), // Dark text for visibility on white cards
-              fontSize: 14,
+              fontSize: 13,
               fontWeight: FontWeight.w500,
             ),
           ),
           subtitle: Text(
-            isNested 
-                ? '${pdf.date} • ${pdf.size}'
-                : '${pdf.folderName ?? "Unknown"} • ${pdf.date} • ${pdf.size}',
+            '${pdf.date} - ${pdf.size}', // Format: MM/DD/YYYY HH:MM - SIZE KB to match image
             style: const TextStyle(
               color: Color(0xFF9E9E9E), // Grey text for metadata on white cards
-              fontSize: 12,
+              fontSize: 11,
             ),
           ),
           trailing: Row(
@@ -2404,9 +2396,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               ),
               IconButton(
                 onPressed: () => _showPDFOptionsMenu(context, pdf),
-                icon: Icon(
+                icon: const Icon(
                   Icons.more_vert,
-                  color: Theme.of(context).iconTheme.color?.withOpacity(0.7) ?? Colors.grey,
+                  color: Color(0xFF9E9E9E), // Gray color to match image
                   size: 20,
                 ),
               ),

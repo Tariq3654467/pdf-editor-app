@@ -277,7 +277,8 @@ class PDFService {
     final hour = date.hour.toString().padLeft(2, '0');
     final minute = date.minute.toString().padLeft(2, '0');
 
-    return '$day/$month/$year $hour:$minute';
+    // Format: MM/DD/YYYY HH:MM to match image design
+    return '$month/$day/$year $hour:$minute';
   }
 }
 

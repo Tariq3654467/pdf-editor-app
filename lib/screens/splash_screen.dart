@@ -1611,12 +1611,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     // Calculate crossAxisCount based on screen width (responsive)
     final screenWidth = MediaQuery.of(context).size.width;
-    int crossAxisCount = 2; // Default for phones
+    int crossAxisCount = 3; // Increased from 2 to show more cards (3 columns on phones)
     if (screenWidth > 600) {
-      crossAxisCount = 3; // Tablets
+      crossAxisCount = 4; // Tablets (4 columns)
     }
     if (screenWidth > 900) {
-      crossAxisCount = 4; // Large tablets
+      crossAxisCount = 5; // Large tablets (5 columns)
     }
     
     return CustomScrollView(
@@ -1675,9 +1675,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
-              crossAxisSpacing: 5, // Further reduced spacing
-              mainAxisSpacing: 5, // Further reduced spacing
-              childAspectRatio: 0.5, // Even smaller cards (taller/narrower)
+              crossAxisSpacing: 4, // Further reduced spacing
+              mainAxisSpacing: 4, // Further reduced spacing
+              childAspectRatio: 0.45, // Much smaller cards to fit 6+ on screen
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
@@ -2222,7 +2222,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               flex: 1, // Reduced from 2 to make text area smaller
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), // Further reduced vertical padding
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2), // Further reduced padding
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.only(

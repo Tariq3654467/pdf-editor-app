@@ -7,6 +7,9 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
+import 'package:printing/printing.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 
 /// Service for running heavy PDF operations in isolates to prevent ANR
 /// All PDF parsing, rendering, and saving operations run off the main thread
@@ -168,17 +171,62 @@ Future<PDFSaveResult> _savePDFWithAnnotationsIsolate(
 }
 
 /// Isolate function: Render PDF page to image
-/// Note: Syncfusion doesn't provide direct image rendering API
-/// This is a placeholder - thumbnails will use lightweight placeholders
-/// For actual rendering, consider using pdfx or printing package
+/// Uses printing package to rasterize PDF pages to PNG images
 /// Must be top-level (not static) for compute() to work
 Future<Uint8List?> _renderPageToImageIsolate(
   PDFPageRenderRequest request,
 ) async {
-  // TODO: Implement actual page rendering using a package that supports it
-  // For now, return null to use lightweight placeholders
-  // This prevents app hangs from heavy PDF viewer instances
-  return null;
+  try {
+    final file = File(request.filePath);
+    if (!await file.exists()) return null;
+
+    final bytes = await file.readAsBytes();
+    final document = sf.PdfDocument(inputBytes: bytes);
+
+    if (request.pageIndex >= document.pages.count) {
+      document.dispose();
+      return null;
+    }
+
+    // Extract the specific page
+    final page = document.pages[request.pageIndex];
+    final pageSize = page.size;
+    
+    // Create a new PDF with just this page
+    final singlePagePdf = sf.PdfDocument();
+    final newPage = singlePagePdf.pages.add();
+    final template = page.createTemplate();
+    newPage.graphics.drawPdfTemplate(
+      template,
+      const ui.Offset(0, 0),
+      ui.Size(pageSize.width, pageSize.height),
+    );
+
+    // Save the single page PDF to bytes
+    final singlePageBytes = await singlePagePdf.save();
+    singlePagePdf.dispose();
+    document.dispose();
+
+    // Calculate thumbnail size (max 300px width for performance)
+    final maxWidth = 300.0;
+    final scale = maxWidth / pageSize.width;
+    final thumbnailWidth = (pageSize.width * scale * request.scale).toInt();
+    final thumbnailHeight = (pageSize.height * scale * request.scale).toInt();
+
+    // Render to image using printing package
+    final pdfDoc = await pw.Document().load(singlePageBytes);
+    final image = await Printing.raster(
+      pdfDoc.pages[0],
+      dpi: 72 * scale * request.scale,
+    );
+
+    // Convert to PNG bytes
+    final imageBytes = await image.toPng();
+    return imageBytes;
+  } catch (e) {
+    print('Error rendering page to image: $e');
+    return null;
+  }
 }
 
 /// Isolate function: Parse PDF document

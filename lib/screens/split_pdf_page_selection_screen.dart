@@ -2,11 +2,14 @@ import 'package:flutter/material.dart';
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:path/path.dart' as path;
+import 'dart:ui' as ui;
+import 'package:flutter/services.dart';
 import '../services/pdf_isolate_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_cache_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../services/pdf_page_cache.dart';
 
 class SplitPDFPageSelectionScreen extends StatefulWidget {
   final String pdfPath;
@@ -28,11 +31,15 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
   bool _isLoading = true;
   bool _isProcessing = false;
   final ScrollController _scrollController = ScrollController();
+  final Map<int, Uint8List?> _thumbnailCache = {};
+  final Set<int> _loadingPages = {};
 
   @override
   void initState() {
     super.initState();
     _loadPDFInfo();
+    // Initialize page cache
+    PDFPageCache().initialize();
   }
 
   @override
@@ -221,29 +228,28 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
               children: [
                 Expanded(
                   child: GridView.builder(
-                      controller: _scrollController,
-                      padding: const EdgeInsets.all(16),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 0.7,
-                      ),
-                      itemCount: _totalPages,
-                      cacheExtent: 300, // Cache items for smoother scrolling
-                      addAutomaticKeepAlives: true, // Keep items alive when scrolled out
-                      addRepaintBoundaries: true, // Optimize repaints
-                      itemBuilder: (context, index) {
-                        final pageNumber = index + 1;
-                        final isSelected = _selectedPages.contains(index);
-                        return _PageThumbnailWidget(
-                          pageNumber: pageNumber,
-                          pageIndex: index,
-                          isSelected: isSelected,
-                          onTap: () => _togglePageSelection(index),
-                        );
-                      },
+                    controller: _scrollController,
+                    padding: const EdgeInsets.all(16),
+                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 3,
+                      crossAxisSpacing: 12,
+                      mainAxisSpacing: 12,
+                      childAspectRatio: 0.7,
                     ),
+                    itemCount: _totalPages,
+                    cacheExtent: 300, // Cache items for smoother scrolling
+                    addAutomaticKeepAlives: true, // Keep items alive when scrolled out
+                    addRepaintBoundaries: true, // Optimize repaints
+                    itemBuilder: (context, index) {
+                      final pageNumber = index + 1;
+                      final isSelected = _selectedPages.contains(index);
+                      return _PageThumbnailWidget(
+                        pageNumber: pageNumber,
+                        pageIndex: index,
+                        isSelected: isSelected,
+                        onTap: () => _togglePageSelection(index),
+                      );
+                    },
                   ),
                 ),
                 Container(
@@ -285,11 +291,36 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
             ),
     );
   }
+}
 
-  // Removed _buildPageThumbnail - using optimized _PageThumbnailWidget instead
-  // Widget _buildPageThumbnail(int pageNumber, int pageIndex, bool isSelected) {
+// Optimized thumbnail widget with AutomaticKeepAliveClientMixin
+class _PageThumbnailWidget extends StatefulWidget {
+  final int pageNumber;
+  final int pageIndex;
+  final bool isSelected;
+  final VoidCallback onTap;
+
+  const _PageThumbnailWidget({
+    required this.pageNumber,
+    required this.pageIndex,
+    required this.isSelected,
+    required this.onTap,
+  });
+
+  @override
+  State<_PageThumbnailWidget> createState() => _PageThumbnailWidgetState();
+}
+
+class _PageThumbnailWidgetState extends State<_PageThumbnailWidget>
+    with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true; // Keep widget alive when scrolled out
+
+  @override
+  Widget build(BuildContext context) {
+    super.build(context); // Required for AutomaticKeepAliveClientMixin
     return GestureDetector(
-      onTap: () => _togglePageSelection(pageIndex),
+      onTap: widget.onTap,
       child: Stack(
         children: [
           Container(
@@ -304,8 +335,8 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
                 ),
               ],
               border: Border.all(
-                color: isSelected ? const Color(0xFFE53935) : Colors.grey[300]!,
-                width: isSelected ? 2 : 1,
+                color: widget.isSelected ? const Color(0xFFE53935) : Colors.grey[300]!,
+                width: widget.isSelected ? 2 : 1,
               ),
             ),
             child: Column(
@@ -322,14 +353,14 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: isSelected 
+                            color: widget.isSelected 
                                 ? const Color(0xFFE53935).withOpacity(0.1)
                                 : Colors.grey[200],
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Icon(
                             Icons.picture_as_pdf,
-                            color: isSelected 
+                            color: widget.isSelected 
                                 ? const Color(0xFFE53935)
                                 : Colors.grey[600],
                             size: 32,
@@ -342,11 +373,11 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 8),
                   child: Text(
-                    '$pageNumber',
+                    '${widget.pageNumber}',
                     style: TextStyle(
-                      color: isSelected ? const Color(0xFFE53935) : Colors.grey[600],
+                      color: widget.isSelected ? const Color(0xFFE53935) : Colors.grey[600],
                       fontSize: 14,
-                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                      fontWeight: widget.isSelected ? FontWeight.bold : FontWeight.normal,
                     ),
                   ),
                 ),
@@ -371,7 +402,7 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
                   ),
                 ],
               ),
-              child: isSelected
+              child: widget.isSelected
                   ? const Icon(
                       Icons.check,
                       color: Color(0xFFE53935),
@@ -384,3 +415,4 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
       ),
     );
   }
+}

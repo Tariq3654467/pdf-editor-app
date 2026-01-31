@@ -1675,9 +1675,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           sliver: SliverGrid(
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: crossAxisCount,
-              crossAxisSpacing: 6, // Further reduced spacing
-              mainAxisSpacing: 6, // Further reduced spacing
-              childAspectRatio: 0.55, // Much smaller cards (taller/narrower)
+              crossAxisSpacing: 5, // Further reduced spacing
+              mainAxisSpacing: 5, // Further reduced spacing
+              childAspectRatio: 0.5, // Even smaller cards (taller/narrower)
             ),
             delegate: SliverChildBuilderDelegate(
               (context, index) {
@@ -2119,7 +2119,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           children: [
             // Top section: Red PDF preview area (very compact)
             Expanded(
-              flex: 2, // Reduced from 3 to make red area smaller
+              flex: 1, // Reduced from 2 to make red area even smaller
               child: Stack(
                 children: [
                   // Red PDF Icon Container
@@ -2138,7 +2138,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
-                          fontSize: 12, // Further reduced from 14
+                          fontSize: 12, // Keep same size
                         ),
                       ),
                     ),
@@ -2219,10 +2219,10 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
             ),
             // Bottom section: White background with file info (very compact)
             Expanded(
-              flex: 2, // Increased from 1 to balance with smaller red area
+              flex: 1, // Reduced from 2 to make text area smaller
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4), // Further reduced vertical padding
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3), // Further reduced vertical padding
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.only(
@@ -2232,7 +2232,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  mainAxisAlignment: MainAxisAlignment.center, // Center content vertically
+                  mainAxisSize: MainAxisSize.min, // Minimize height
                   children: [
                     // PDF filename (1-2 lines max)
                     Flexible(
@@ -2242,13 +2243,13 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Color(0xFF263238),
-                          fontSize: 11, // Further reduced from 12
+                          fontSize: 11, // Keep same size
                           fontWeight: FontWeight.w500,
-                          height: 1.15, // Further reduced from 1.2
+                          height: 1.15, // Keep same
                         ),
                       ),
                     ),
-                    const SizedBox(height: 3), // Reduced from 4
+                    const SizedBox(height: 2), // Keep same
                     // Date • file size and options menu button
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,

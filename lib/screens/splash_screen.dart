@@ -1609,70 +1609,96 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     final paginatedPDFs = _getPaginatedPDFs();
     
-    return ListView(
+    // Calculate crossAxisCount based on screen width (responsive)
+    final screenWidth = MediaQuery.of(context).size.width;
+    int crossAxisCount = 2; // Default for phones
+    if (screenWidth > 600) {
+      crossAxisCount = 3; // Tablets
+    }
+    if (screenWidth > 900) {
+      crossAxisCount = 4; // Large tablets
+    }
+    
+    return CustomScrollView(
       controller: _scrollController,
-      padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 8,
-      ),
-      children: [
+      slivers: [
         // Tools History Section (only on "My file" tab)
         if (_selectedTabIndex == 0 && _toolsHistory.isNotEmpty)
-          Container(
-            margin: const EdgeInsets.only(bottom: 12),
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardColor,
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: Theme.of(context).dividerColor.withOpacity(0.5),
+          SliverToBoxAdapter(
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Theme.of(context).cardColor,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: Theme.of(context).dividerColor.withOpacity(0.5),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Recent Tools Activity',
+                        style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).brightness == Brightness.dark
+                              ? Colors.white
+                              : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
+                        ),
+                      ),
+                      TextButton(
+                        onPressed: () async {
+                          await PDFPreferencesService.clearToolsHistory();
+                          await _loadToolsHistory();
+                        },
+                        child: const Text(
+                          'Clear',
+                          style: TextStyle(fontSize: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
+                ],
               ),
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Recent Tools Activity',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                        color: Theme.of(context).brightness == Brightness.dark
-                            ? Colors.white
-                            : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
-                      ),
-                    ),
-                    TextButton(
-                      onPressed: () async {
-                        await PDFPreferencesService.clearToolsHistory();
-                        await _loadToolsHistory();
-                      },
-                      child: const Text(
-                        'Clear',
-                        style: TextStyle(fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
-              ],
+          ),
+        // PDF Grid (horizontal grid layout with smaller cards)
+        SliverPadding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          sliver: SliverGrid(
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: crossAxisCount,
+              crossAxisSpacing: 8, // Further reduced spacing
+              mainAxisSpacing: 8, // Further reduced spacing
+              childAspectRatio: 0.65, // Even more compact cards (taller)
+            ),
+            delegate: SliverChildBuilderDelegate(
+              (context, index) {
+                if (index >= paginatedPDFs.length) {
+                  return null;
+                }
+                return _buildPDFGridCard(paginatedPDFs[index]);
+              },
+              childCount: paginatedPDFs.length,
             ),
           ),
-        // PDF List (vertical list matching reference design)
-        ...paginatedPDFs.map((pdf) => Padding(
-          padding: const EdgeInsets.only(bottom: 12),
-          child: _buildPDFListCard(pdf),
-        )),
+        ),
         // Load more indicator
         if (_hasMoreItems())
-          const Padding(
-            padding: EdgeInsets.all(16.0),
-            child: Center(
-              child: CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                ),
               ),
             ),
           ),
@@ -2091,9 +2117,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Top section: Red PDF preview area (≈60%)
+            // Top section: Red PDF preview area (very compact)
             Expanded(
-              flex: 3, // 60% of card height
+              flex: 2, // Keep same ratio
               child: Stack(
                 children: [
                   // Red PDF Icon Container
@@ -2102,8 +2128,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                     decoration: const BoxDecoration(
                       color: Color(0xFFE53935),
                       borderRadius: BorderRadius.only(
-                        topLeft: Radius.circular(12),
-                        topRight: Radius.circular(12),
+                        topLeft: Radius.circular(8),
+                        topRight: Radius.circular(8),
                       ),
                     ),
                     child: const Center(
@@ -2112,15 +2138,15 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         style: TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.bold,
-                          fontSize: 18,
+                          fontSize: 12, // Further reduced from 14
                         ),
                       ),
                     ),
                   ),
                   // Favorite/Star button (top right corner)
                   Positioned(
-                    top: 6,
-                    right: 6,
+                    top: 3,
+                    right: 3,
                     child: GestureDetector(
                       onTap: () async {
                         final newBookmarkStatus = !pdf.isFavorite;
@@ -2141,14 +2167,14 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         });
                       },
                       child: Container(
-                        padding: const EdgeInsets.all(5),
+                        padding: const EdgeInsets.all(3), // Further reduced from 4
                         decoration: BoxDecoration(
                           color: Colors.white,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 2,
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 1.5,
                               offset: const Offset(0, 1),
                             ),
                           ],
@@ -2156,26 +2182,26 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         child: Icon(
                           pdf.isFavorite ? Icons.star : Icons.star_outline,
                           color: const Color(0xFFE53935),
-                          size: 18,
+                          size: 12, // Further reduced from 14
                         ),
                       ),
                     ),
                   ),
                   // Options menu button (top left corner)
                   Positioned(
-                    top: 6,
-                    left: 6,
+                    top: 3,
+                    left: 3,
                     child: GestureDetector(
                       onTap: () => _showPDFOptionsMenu(context, pdf),
                       child: Container(
-                        padding: const EdgeInsets.all(5),
+                        padding: const EdgeInsets.all(3), // Further reduced from 4
                         decoration: BoxDecoration(
                           color: Colors.white,
                           shape: BoxShape.circle,
                           boxShadow: [
                             BoxShadow(
-                              color: Colors.black.withOpacity(0.1),
-                              blurRadius: 2,
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 1.5,
                               offset: const Offset(0, 1),
                             ),
                           ],
@@ -2183,7 +2209,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         child: Icon(
                           Icons.more_vert,
                           color: const Color(0xFFE53935),
-                          size: 18,
+                          size: 12, // Further reduced from 14
                         ),
                       ),
                     ),
@@ -2191,17 +2217,17 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 ],
               ),
             ),
-            // Bottom section: White background with file info (≈40%)
+            // Bottom section: White background with file info (very compact)
             Expanded(
-              flex: 2, // 40% of card height
+              flex: 2, // Keep same ratio
               child: Container(
                 width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5), // Further reduced padding
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.only(
-                    bottomLeft: Radius.circular(12),
-                    bottomRight: Radius.circular(12),
+                    bottomLeft: Radius.circular(8),
+                    bottomRight: Radius.circular(8),
                   ),
                 ),
                 child: Column(
@@ -2216,9 +2242,9 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           color: Color(0xFF263238),
-                          fontSize: 13,
+                          fontSize: 11, // Further reduced from 12
                           fontWeight: FontWeight.w500,
-                          height: 1.3,
+                          height: 1.15, // Further reduced from 1.2
                         ),
                       ),
                     ),
@@ -2235,8 +2261,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                             overflow: TextOverflow.ellipsis,
                             style: const TextStyle(
                               color: Color(0xFF9E9E9E),
-                              fontSize: 11,
-                              height: 1.2,
+                              fontSize: 10, // Reduced from 11
+                              height: 1.1, // Reduced from 1.2
                             ),
                           ),
                         ),
@@ -2513,13 +2539,56 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
       }
       
       // Ensure PDF is in app storage (copy if external or content URI)
-      final filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
-      final file = io.File(filePath);
+      String? filePath;
+      try {
+        filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+      } catch (e) {
+        print('SplashScreen: Error ensuring file in app storage: $e');
+        if (mounted) {
+          Navigator.pop(context); // Close loading dialog
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Error accessing PDF file. Please try again.',
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                ),
+              ),
+              backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                               (Theme.of(context).brightness == Brightness.dark 
+                                   ? Colors.grey[800] 
+                                   : Colors.grey[300]),
+            ),
+          );
+        }
+        return;
+      }
       
       if (mounted) {
         Navigator.pop(context); // Close loading dialog
       }
       
+      if (filePath == null || filePath.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'PDF file not found or cannot be accessed',
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                ),
+              ),
+              backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                               (Theme.of(context).brightness == Brightness.dark 
+                                   ? Colors.grey[800] 
+                                   : Colors.grey[300]),
+            ),
+          );
+        }
+        return;
+      }
+      
+      final file = io.File(filePath);
       if (await file.exists()) {
         await Share.shareXFiles(
           [XFile(filePath)],
@@ -2854,6 +2923,28 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                     SnackBar(
                       content: Text(
                         'Name contains invalid characters',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                       (Theme.of(context).brightness == Brightness.dark 
+                                           ? Colors.grey[800] 
+                                           : Colors.grey[300]),
+                    ),
+                  );
+                }
+                return;
+              }
+
+              // Ensure actualFilePath is not null
+              if (actualFilePath == null || actualFilePath.isEmpty) {
+                if (context.mounted) {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'PDF file path is invalid',
                         style: TextStyle(
                           color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
                         ),

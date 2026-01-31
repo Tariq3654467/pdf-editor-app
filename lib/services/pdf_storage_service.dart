@@ -121,27 +121,35 @@ class PDFStorageService {
   static Future<String?> copyToAppStorage(String sourcePath) async {
     try {
       // Handle content URIs FIRST - before any File operations
-      if (sourcePath.startsWith('content://')) {
-        print('PDFStorageService: Detected content URI, copying: $sourcePath');
-        final result = await _copyContentUriToAppStorage(sourcePath);
-        if (result != null) {
+      // Check for content:// URIs (case-insensitive check)
+      final normalizedPath = sourcePath.trim();
+      if (normalizedPath.toLowerCase().startsWith('content://')) {
+        print('PDFStorageService: Detected content URI, copying: $normalizedPath');
+        final result = await _copyContentUriToAppStorage(normalizedPath);
+        if (result != null && result.isNotEmpty) {
           print('PDFStorageService: Successfully copied content URI to: $result');
           return result;
         } else {
-          print('PDFStorageService: Failed to copy content URI: $sourcePath');
+          print('PDFStorageService: Failed to copy content URI: $normalizedPath');
           return null;
         }
       }
       
       // For regular file paths, check if file exists
-      final sourceFile = File(sourcePath);
+      // Only proceed if it's NOT a content URI (double-check)
+      if (normalizedPath.toLowerCase().startsWith('content://')) {
+        print('PDFStorageService: ERROR - Content URI detected but not handled: $normalizedPath');
+        return null;
+      }
+      
+      final sourceFile = File(normalizedPath);
       if (!await sourceFile.exists()) {
-        print('PDFStorageService: Source file does not exist: $sourcePath');
+        print('PDFStorageService: Source file does not exist: $normalizedPath');
         return null;
       }
       
       final pdfDirectory = await getAppPDFDirectory();
-      final fileName = path.basename(sourcePath);
+      final fileName = path.basename(normalizedPath);
       
       // Handle duplicate names
       var targetPath = path.join(pdfDirectory.path, fileName);

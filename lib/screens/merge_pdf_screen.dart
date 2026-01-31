@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart';
 import '../models/pdf_file.dart';
 import '../services/pdf_cache_service.dart';
 import '../services/pdf_tools_service.dart';
@@ -232,6 +233,7 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
               date: PDFService.formatDate(stat.modified),
               size: PDFService.formatFileSize(stat.size),
               filePath: filePath,
+              isFavorite: false,
               dateModified: stat.modified,
               fileSizeBytes: stat.size,
             );
@@ -267,7 +269,9 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
     final result = await showDialog<String>(
       context: context,
       builder: (context) {
-        return Dialog(
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return Dialog(
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
@@ -289,7 +293,7 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
                 TextField(
                   controller: controller,
                   autofocus: true,
-                  selection: selectedText,
+                  style: const TextStyle(fontSize: 14),
                   decoration: InputDecoration(
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(8),
@@ -309,11 +313,14 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
                             icon: const Icon(Icons.close, size: 20),
                             onPressed: () {
                               controller.clear();
+                              setDialogState(() {});
                             },
                           )
                         : null,
                   ),
-                  style: const TextStyle(fontSize: 14),
+                  onChanged: (value) {
+                    setDialogState(() {});
+                  },
                 ),
                 const SizedBox(height: 20),
                 Row(
@@ -365,6 +372,8 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
               ],
             ),
           ),
+        );
+          },
         );
       },
     );
@@ -419,15 +428,16 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
       // Merge PDFs
       String? finalMergedPath = await PDFToolsService.mergePDFs(filePaths);
       
-      // Rename the merged file to user's chosen name
+      // Rename the merged file to user's chosen name (non-blocking)
       if (finalMergedPath != null) {
         try {
-          final mergedFile = File(finalMergedPath);
-          if (await mergedFile.exists()) {
-            final directory = path.dirname(finalMergedPath);
-            final newPath = path.join(directory, '$fileName.pdf');
-            final renamedFile = await mergedFile.rename(newPath);
-            finalMergedPath = renamedFile.path;
+          // Use compute to move file operations off main thread
+          final renamedPath = await _renameMergedFile(finalMergedPath, fileName);
+          if (renamedPath != null) {
+            finalMergedPath = renamedPath;
+            
+            // Update cache with new file path and name (non-blocking)
+            unawaited(_updateCacheForRenamedFile(finalMergedPath));
           }
         } catch (e) {
           print('Error renaming merged file: $e');
@@ -441,35 +451,42 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
       }
 
       if (finalMergedPath != null) {
-        // Save to history
-        await PDFPreferencesService.addToolsHistory(
+        // Save to history (non-blocking)
+        unawaited(PDFPreferencesService.addToolsHistory(
           'merge',
           filePaths.first,
           resultPath: finalMergedPath,
-        );
+        ));
 
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('PDFs merged successfully!'),
-              duration: Duration(seconds: 2),
-            ),
-          );
+          // Pop merge screen first to return to tools/home screen
+          Navigator.of(context).pop(true);
+          
+          // Show success message after navigation completes
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('PDFs merged successfully!'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            }
+          });
 
-          // Navigate to merged PDF
-          await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => PDFViewerScreen(
-                filePath: finalMergedPath,
-                fileName: fileName,
-              ),
-            ),
-          );
-
-          // Pop merge screen and trigger refresh
-          if (mounted) {
-            Navigator.of(context).pop(true);
-          }
+          // Navigate to merged PDF after a short delay to allow screen to pop
+          Future.delayed(const Duration(milliseconds: 500), () {
+            if (mounted && finalMergedPath != null) {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => PDFViewerScreen(
+                    filePath: finalMergedPath!,
+                    fileName: path.basename(finalMergedPath!),
+                  ),
+                ),
+              );
+            }
+          });
         }
       } else {
         if (mounted) {
@@ -496,6 +513,86 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
         setState(() => _isProcessing = false);
       }
     }
+  }
+
+  /// Rename merged file (runs in isolate to avoid blocking UI)
+  Future<String?> _renameMergedFile(String mergedPath, String fileName) async {
+    return await compute(_renameFileIsolate, _RenameFileRequest(
+      mergedPath: mergedPath,
+      fileName: fileName,
+    ));
+  }
+
+  /// Update cache for renamed file (non-blocking, runs in background)
+  Future<void> _updateCacheForRenamedFile(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (await file.exists()) {
+        final stat = await file.stat();
+        final updatedPDF = PDFFile(
+          name: path.basename(filePath),
+          date: PDFService.formatDate(stat.modified),
+          size: PDFService.formatFileSize(stat.size),
+          filePath: filePath,
+          isFavorite: false,
+          dateModified: stat.modified,
+          fileSizeBytes: stat.size,
+        );
+        await PDFCacheService.addPDFToCache(updatedPDF);
+        await PDFPreferencesService.setLastAccessed(filePath);
+      }
+    } catch (e) {
+      print('Error updating cache after rename: $e');
+    }
+  }
+}
+
+// Helper function to run async operations without awaiting
+void unawaited(Future<void> future) {
+  future.catchError((error) {
+    print('Unawaited future error: $error');
+  });
+}
+
+/// Request class for file rename operation
+class _RenameFileRequest {
+  final String mergedPath;
+  final String fileName;
+  
+  _RenameFileRequest({
+    required this.mergedPath,
+    required this.fileName,
+  });
+}
+
+/// Isolate function: Rename file and return new path
+Future<String?> _renameFileIsolate(_RenameFileRequest request) async {
+  try {
+    final mergedFile = File(request.mergedPath);
+    if (!await mergedFile.exists()) {
+      return null;
+    }
+    
+    final directory = path.dirname(request.mergedPath);
+    final newPath = path.join(directory, '${request.fileName}.pdf');
+    
+    // Check if file with same name exists and handle it
+    var targetPath = newPath;
+    var targetFile = File(targetPath);
+    int counter = 1;
+    while (await targetFile.exists()) {
+      final nameWithoutExt = path.basenameWithoutExtension(request.fileName);
+      final newFileName = '${nameWithoutExt}_$counter.pdf';
+      targetPath = path.join(directory, newFileName);
+      targetFile = File(targetPath);
+      counter++;
+    }
+    
+    final renamedFile = await mergedFile.rename(targetPath);
+    return renamedFile.path;
+  } catch (e) {
+    print('Error in rename file isolate: $e');
+    return null;
   }
 }
 

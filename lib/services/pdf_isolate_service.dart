@@ -37,17 +37,56 @@ class PDFIsolateService {
 
   /// Split PDF in isolate - CRITICAL: Prevents ANR
   static Future<List<String>> splitPDF(String pdfPath) async {
-    return await compute(_splitPDFIsolate, pdfPath);
+    // Get directory path in main isolate before passing to compute
+    final directory = await getApplicationDocumentsDirectory();
+    final pdfDirectory = Directory('${directory.path}/PDFs');
+    if (!await pdfDirectory.exists()) {
+      await pdfDirectory.create(recursive: true);
+    }
+    
+    // Pass both pdfPath and outputDirectory to isolate
+    final splitRequest = SplitPDFRequest(
+      pdfPath: pdfPath,
+      outputDirectory: pdfDirectory.path,
+    );
+    
+    return await compute(_splitPDFIsolate, splitRequest);
   }
 
   /// Merge PDFs in isolate - CRITICAL: Prevents ANR
   static Future<String?> mergePDFs(List<String> pdfPaths) async {
-    return await compute(_mergePDFsIsolate, pdfPaths);
+    // Get directory path in main isolate before passing to compute
+    final directory = await getApplicationDocumentsDirectory();
+    final pdfDirectory = Directory('${directory.path}/PDFs');
+    if (!await pdfDirectory.exists()) {
+      await pdfDirectory.create(recursive: true);
+    }
+    
+    // Pass both pdfPaths and outputDirectory to isolate
+    final mergeRequest = MergePDFRequest(
+      pdfPaths: pdfPaths,
+      outputDirectory: pdfDirectory.path,
+    );
+    
+    return await compute(_mergePDFsIsolate, mergeRequest);
   }
 
   /// Compress PDF in isolate - CRITICAL: Prevents ANR
   static Future<String?> compressPDF(String pdfPath) async {
-    return await compute(_compressPDFIsolate, pdfPath);
+    // Get directory path in main isolate before passing to compute
+    final directory = await getApplicationDocumentsDirectory();
+    final pdfDirectory = Directory('${directory.path}/PDFs');
+    if (!await pdfDirectory.exists()) {
+      await pdfDirectory.create(recursive: true);
+    }
+    
+    // Pass both pdfPath and outputDirectory to isolate
+    final compressRequest = CompressPDFRequest(
+      pdfPath: pdfPath,
+      outputDirectory: pdfDirectory.path,
+    );
+    
+    return await compute(_compressPDFIsolate, compressRequest);
   }
 }
 
@@ -278,20 +317,53 @@ class PDFPageData {
   });
 }
 
+/// Request class for split PDF operation
+class SplitPDFRequest {
+  final String pdfPath;
+  final String outputDirectory;
+  
+  SplitPDFRequest({
+    required this.pdfPath,
+    required this.outputDirectory,
+  });
+}
+
+/// Request class for merge PDF operation
+class MergePDFRequest {
+  final List<String> pdfPaths;
+  final String outputDirectory;
+  
+  MergePDFRequest({
+    required this.pdfPaths,
+    required this.outputDirectory,
+  });
+}
+
+/// Request class for compress PDF operation
+class CompressPDFRequest {
+  final String pdfPath;
+  final String outputDirectory;
+  
+  CompressPDFRequest({
+    required this.pdfPath,
+    required this.outputDirectory,
+  });
+}
+
 /// Isolate function: Split PDF
 /// Must be top-level (not static) for compute() to work
-Future<List<String>> _splitPDFIsolate(String pdfPath) async {
+Future<List<String>> _splitPDFIsolate(SplitPDFRequest request) async {
   final List<String> splitFiles = [];
   sf.PdfDocument? pdf;
   
   try {
-    final file = File(pdfPath);
+    final file = File(request.pdfPath);
     if (!await file.exists()) return splitFiles;
 
     final bytes = await file.readAsBytes();
     pdf = sf.PdfDocument(inputBytes: bytes);
     final totalPages = pdf.pages.count;
-    final baseName = path.basenameWithoutExtension(pdfPath);
+    final baseName = path.basenameWithoutExtension(request.pdfPath);
 
     for (int i = 0; i < totalPages; i++) {
       try {
@@ -311,9 +383,8 @@ Future<List<String>> _splitPDFIsolate(String pdfPath) async {
         final splitBytes = await singlePagePdf.save();
         singlePagePdf.dispose();
 
-        // Save to app storage directory
-        final directory = await getApplicationDocumentsDirectory();
-        final pdfDirectory = Directory('${directory.path}/PDFs');
+        // Save to app storage directory using provided path
+        final pdfDirectory = Directory(request.outputDirectory);
         if (!await pdfDirectory.exists()) {
           await pdfDirectory.create(recursive: true);
         }
@@ -350,16 +421,16 @@ Future<List<String>> _splitPDFIsolate(String pdfPath) async {
 
 /// Isolate function: Merge PDFs
 /// Must be top-level (not static) for compute() to work
-Future<String?> _mergePDFsIsolate(List<String> pdfPaths) async {
+Future<String?> _mergePDFsIsolate(MergePDFRequest request) async {
   sf.PdfDocument? mergedPdf;
   final List<sf.PdfDocument> pdfsToDispose = [];
   
   try {
-    if (pdfPaths.isEmpty) return null;
+    if (request.pdfPaths.isEmpty) return null;
 
     mergedPdf = sf.PdfDocument();
 
-    for (var pdfPath in pdfPaths) {
+    for (var pdfPath in request.pdfPaths) {
       final file = File(pdfPath);
       if (!await file.exists()) continue;
 
@@ -390,9 +461,8 @@ Future<String?> _mergePDFsIsolate(List<String> pdfPaths) async {
 
     final mergedBytes = await mergedPdf.save();
     
-    // Save to app storage
-    final directory = await getApplicationDocumentsDirectory();
-    final pdfDirectory = Directory('${directory.path}/PDFs');
+    // Save to app storage using provided directory path
+    final pdfDirectory = Directory(request.outputDirectory);
     if (!await pdfDirectory.exists()) {
       await pdfDirectory.create(recursive: true);
     }
@@ -431,12 +501,12 @@ Future<String?> _mergePDFsIsolate(List<String> pdfPaths) async {
 
 /// Isolate function: Compress PDF
 /// Must be top-level (not static) for compute() to work
-Future<String?> _compressPDFIsolate(String pdfPath) async {
+Future<String?> _compressPDFIsolate(CompressPDFRequest request) async {
   sf.PdfDocument? pdf;
   sf.PdfDocument? compressedPdf;
   
   try {
-    final file = File(pdfPath);
+    final file = File(request.pdfPath);
     if (!await file.exists()) return null;
 
     final bytes = await file.readAsBytes();
@@ -468,14 +538,13 @@ Future<String?> _compressPDFIsolate(String pdfPath) async {
 
     final compressedBytes = await compressedPdf.save();
     
-    // Save to app storage
-    final directory = await getApplicationDocumentsDirectory();
-    final pdfDirectory = Directory('${directory.path}/PDFs');
+    // Save to app storage using provided directory path
+    final pdfDirectory = Directory(request.outputDirectory);
     if (!await pdfDirectory.exists()) {
       await pdfDirectory.create(recursive: true);
     }
 
-    final baseName = path.basenameWithoutExtension(pdfPath);
+    final baseName = path.basenameWithoutExtension(request.pdfPath);
     final fileName = '${baseName}_compressed.pdf';
     var targetPath = path.join(pdfDirectory.path, fileName);
     var targetFile = File(targetPath);

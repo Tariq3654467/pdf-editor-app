@@ -168,33 +168,17 @@ Future<PDFSaveResult> _savePDFWithAnnotationsIsolate(
 }
 
 /// Isolate function: Render PDF page to image
-/// Note: This is a placeholder - actual implementation depends on Syncfusion API
+/// Note: Syncfusion doesn't provide direct image rendering API
+/// This is a placeholder - thumbnails will use lightweight placeholders
+/// For actual rendering, consider using pdfx or printing package
 /// Must be top-level (not static) for compute() to work
 Future<Uint8List?> _renderPageToImageIsolate(
   PDFPageRenderRequest request,
 ) async {
-  try {
-    final file = File(request.filePath);
-    if (!await file.exists()) return null;
-
-    final bytes = await file.readAsBytes();
-    final document = sf.PdfDocument(inputBytes: bytes);
-
-    if (request.pageIndex >= document.pages.count) {
-      document.dispose();
-      return null;
-    }
-
-    // TODO: Implement actual page rendering to image
-    // Syncfusion PDF viewer handles rendering internally
-    // For caching, consider using the viewer's rendered output
-    // This function is a placeholder for future implementation
-    
-    document.dispose();
-    return null;
-  } catch (e) {
-    return null;
-  }
+  // TODO: Implement actual page rendering using a package that supports it
+  // For now, return null to use lightweight placeholders
+  // This prevents app hangs from heavy PDF viewer instances
+  return null;
 }
 
 /// Isolate function: Parse PDF document

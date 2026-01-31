@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:path/path.dart' as path;
+import 'dart:ui' as ui;
 import '../services/pdf_isolate_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_cache_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../services/pdf_page_cache.dart';
 
 class SplitPDFPageSelectionScreen extends StatefulWidget {
   final String pdfPath;
@@ -27,11 +29,22 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
   int _totalPages = 0;
   bool _isLoading = true;
   bool _isProcessing = false;
+  final Map<int, Uint8List?> _thumbnailCache = {};
+  final Set<int> _loadingPages = {};
+  final ScrollController _scrollController = ScrollController();
 
   @override
   void initState() {
     super.initState();
     _loadPDFInfo();
+    // Initialize page cache
+    PDFPageCache().initialize();
+  }
+
+  @override
+  void dispose() {
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadPDFInfo() async {
@@ -42,6 +55,8 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
           _totalPages = info.pageCount;
           _isLoading = false;
         });
+        // Pre-load first few thumbnails
+        _preloadThumbnails(0, 6);
       }
     } catch (e) {
       if (mounted) {
@@ -56,6 +71,21 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
         );
       }
     }
+  }
+
+  Future<void> _preloadThumbnails(int startIndex, int count) async {
+    for (int i = startIndex; i < startIndex + count && i < _totalPages; i++) {
+      if (!_thumbnailCache.containsKey(i) && !_loadingPages.contains(i)) {
+        _loadThumbnail(i);
+      }
+    }
+  }
+
+  Future<void> _loadThumbnail(int pageIndex) async {
+    // Skip loading - use lightweight placeholders for performance
+    // This prevents app hangs from heavy PDF rendering
+    // Thumbnails will show page numbers instead
+    return;
   }
 
   void _togglePageSelection(int pageIndex) {
@@ -212,20 +242,39 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
           : Column(
               children: [
                 Expanded(
-                  child: GridView.builder(
-                    padding: const EdgeInsets.all(16),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 0.7,
-                    ),
-                    itemCount: _totalPages,
-                    itemBuilder: (context, index) {
-                      final pageNumber = index + 1;
-                      final isSelected = _selectedPages.contains(index);
-                      return _buildPageThumbnail(pageNumber, index, isSelected);
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      if (notification is ScrollUpdateNotification) {
+                        // Load thumbnails for visible items
+                        final renderObject = _scrollController.position;
+                        if (renderObject.hasContentDimensions) {
+                          final firstVisible = renderObject.pixels ~/ 200; // Approximate
+                          final lastVisible = (renderObject.pixels + renderObject.viewportDimension) ~/ 200;
+                          _preloadThumbnails(
+                            (firstVisible * 3).clamp(0, _totalPages),
+                            ((lastVisible - firstVisible + 1) * 3).clamp(0, _totalPages),
+                          );
+                        }
+                      }
+                      return false;
                     },
+                    child: GridView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                        childAspectRatio: 0.7,
+                      ),
+                      itemCount: _totalPages,
+                      cacheExtent: 500, // Cache more items for smoother scrolling
+                      itemBuilder: (context, index) {
+                        final pageNumber = index + 1;
+                        final isSelected = _selectedPages.contains(index);
+                        return _buildPageThumbnail(pageNumber, index, isSelected);
+                      },
+                    ),
                   ),
                 ),
                 Container(
@@ -269,6 +318,14 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
   }
 
   Widget _buildPageThumbnail(int pageNumber, int pageIndex, bool isSelected) {
+    // Load thumbnail if not cached and not loading
+    if (!_thumbnailCache.containsKey(pageIndex) && !_loadingPages.contains(pageIndex)) {
+      _loadThumbnail(pageIndex);
+    }
+
+    final imageBytes = _thumbnailCache[pageIndex];
+    final isLoading = _loadingPages.contains(pageIndex);
+
     return GestureDetector(
       onTap: () => _togglePageSelection(pageIndex),
       child: Stack(
@@ -297,10 +354,32 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
                       topLeft: Radius.circular(7),
                       topRight: Radius.circular(7),
                     ),
-                    child: _PDFPageThumbnail(
-                      filePath: widget.pdfPath,
-                      pageNumber: pageNumber,
-                    ),
+                    child: imageBytes != null
+                        ? _buildThumbnailImage(imageBytes)
+                        : isLoading
+                            ? const Center(
+                                child: SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                                  ),
+                                ),
+                              )
+                            : Container(
+                                color: Colors.grey[200],
+                                child: Center(
+                                  child: Text(
+                                    '$pageNumber',
+                                    style: TextStyle(
+                                      color: Colors.grey[600],
+                                      fontSize: 24,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
                   ),
                 ),
                 Padding(
@@ -348,79 +427,54 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
       ),
     );
   }
-}
 
-// Widget to display a single PDF page as thumbnail
-class _PDFPageThumbnail extends StatefulWidget {
-  final String filePath;
-  final int pageNumber;
-
-  const _PDFPageThumbnail({
-    required this.filePath,
-    required this.pageNumber,
-  });
-
-  @override
-  State<_PDFPageThumbnail> createState() => _PDFPageThumbnailState();
-}
-
-class _PDFPageThumbnailState extends State<_PDFPageThumbnail> {
-  late PdfViewerController _controller;
-  bool _isLoaded = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller = PdfViewerController();
-    Future.delayed(const Duration(milliseconds: 50), () {
-      if (mounted) {
-        _controller.jumpToPage(widget.pageNumber);
-        setState(() {
-          _isLoaded = true;
-        });
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      color: Colors.grey[200],
-      child: _isLoaded
-          ? SfPdfViewer.file(
-              File(widget.filePath),
-              controller: _controller,
-              enableDoubleTapZooming: false,
-              enableTextSelection: false,
-              canShowScrollHead: false,
-              canShowScrollStatus: false,
-              canShowPaginationDialog: false,
-              canShowPasswordDialog: false,
-              pageLayoutMode: PdfPageLayoutMode.single,
-              scrollDirection: PdfScrollDirection.horizontal,
-              onDocumentLoaded: (details) {
-                if (mounted) {
-                  _controller.jumpToPage(widget.pageNumber);
-                }
-              },
-            )
-          : const Center(
-              child: SizedBox(
-                width: 20,
-                height: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
-                ),
+  Widget _buildThumbnailImage(Uint8List imageBytes) {
+    return FutureBuilder<ui.Image>(
+      future: _decodeImage(imageBytes),
+      builder: (context, snapshot) {
+        if (snapshot.hasData && snapshot.data != null) {
+          return CustomPaint(
+            painter: _ImagePainter(snapshot.data!),
+            child: Container(),
+          );
+        }
+        return Container(
+          color: Colors.grey[200],
+          child: const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
               ),
             ),
+          ),
+        );
+      },
     );
+  }
+
+  Future<ui.Image> _decodeImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    return frame.image;
   }
 }
 
+class _ImagePainter extends CustomPainter {
+  final ui.Image image;
+
+  _ImagePainter(this.image);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dstRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawImageRect(image, srcRect, dstRect, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ImagePainter oldDelegate) => oldDelegate.image != image;
+}

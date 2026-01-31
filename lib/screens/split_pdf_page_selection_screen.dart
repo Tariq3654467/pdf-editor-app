@@ -56,6 +56,8 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
           _totalPages = info.pageCount;
           _isLoading = false;
         });
+        // Pre-load first few thumbnails
+        _preloadThumbnails(0, 9);
       }
     } catch (e) {
       if (mounted) {
@@ -91,6 +93,71 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
         _selectedPages = List.generate(_totalPages, (index) => index).toSet();
       }
     });
+  }
+
+  Future<void> _preloadThumbnails(int startIndex, int count) async {
+    for (int i = startIndex; i < startIndex + count && i < _totalPages; i++) {
+      if (!_thumbnailCache.containsKey(i) && !_loadingPages.contains(i)) {
+        _loadThumbnail(i);
+      }
+    }
+  }
+
+  Future<void> _loadThumbnail(int pageIndex) async {
+    if (_loadingPages.contains(pageIndex) || _thumbnailCache.containsKey(pageIndex)) {
+      return;
+    }
+
+    setState(() {
+      _loadingPages.add(pageIndex);
+    });
+
+    try {
+      // Check cache first
+      final cached = await PDFPageCache().getCachedPage(widget.pdfPath, pageIndex);
+      if (cached != null) {
+        if (mounted) {
+          setState(() {
+            _thumbnailCache[pageIndex] = cached;
+            _loadingPages.remove(pageIndex);
+          });
+        }
+        return;
+      }
+
+      // Render thumbnail in isolate
+      final imageBytes = await PDFIsolateService.renderPageToImage(
+        PDFPageRenderRequest(
+          filePath: widget.pdfPath,
+          pageIndex: pageIndex,
+          scale: 0.5, // Smaller scale for thumbnails
+        ),
+      );
+
+      if (imageBytes != null) {
+        // Cache the thumbnail
+        await PDFPageCache().cachePage(widget.pdfPath, pageIndex, imageBytes);
+        
+        if (mounted) {
+          setState(() {
+            _thumbnailCache[pageIndex] = imageBytes;
+            _loadingPages.remove(pageIndex);
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _loadingPages.remove(pageIndex);
+          });
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _loadingPages.remove(pageIndex);
+        });
+      }
+    }
   }
 
   Future<void> _splitSelectedPages() async {
@@ -227,29 +294,52 @@ class _SplitPDFPageSelectionScreenState extends State<SplitPDFPageSelectionScree
           : Column(
               children: [
                 Expanded(
-                  child: GridView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16),
-                    gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 3,
-                      crossAxisSpacing: 12,
-                      mainAxisSpacing: 12,
-                      childAspectRatio: 0.7,
-                    ),
-                    itemCount: _totalPages,
-                    cacheExtent: 300, // Cache items for smoother scrolling
-                    addAutomaticKeepAlives: true, // Keep items alive when scrolled out
-                    addRepaintBoundaries: true, // Optimize repaints
-                    itemBuilder: (context, index) {
-                      final pageNumber = index + 1;
-                      final isSelected = _selectedPages.contains(index);
-                      return _PageThumbnailWidget(
-                        pageNumber: pageNumber,
-                        pageIndex: index,
-                        isSelected: isSelected,
-                        onTap: () => _togglePageSelection(index),
-                      );
+                  child: NotificationListener<ScrollNotification>(
+                    onNotification: (notification) {
+                      if (notification is ScrollUpdateNotification) {
+                        // Load thumbnails for visible items
+                        final renderObject = _scrollController.position;
+                        if (renderObject.hasContentDimensions) {
+                          final firstVisible = (renderObject.pixels / 200).floor();
+                          final lastVisible = ((renderObject.pixels + renderObject.viewportDimension) / 200).ceil();
+                          _preloadThumbnails(
+                            (firstVisible * 3).clamp(0, _totalPages),
+                            ((lastVisible - firstVisible + 1) * 3).clamp(0, _totalPages),
+                          );
+                        }
+                      }
+                      return false;
                     },
+                    child: GridView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                        childAspectRatio: 0.7,
+                      ),
+                      itemCount: _totalPages,
+                      cacheExtent: 300, // Cache items for smoother scrolling
+                      addAutomaticKeepAlives: true, // Keep items alive when scrolled out
+                      addRepaintBoundaries: true, // Optimize repaints
+                      itemBuilder: (context, index) {
+                        final pageNumber = index + 1;
+                        final isSelected = _selectedPages.contains(index);
+                        // Load thumbnail if not cached
+                        if (!_thumbnailCache.containsKey(index) && !_loadingPages.contains(index)) {
+                          _loadThumbnail(index);
+                        }
+                        return _PageThumbnailWidget(
+                          pageNumber: pageNumber,
+                          pageIndex: index,
+                          isSelected: isSelected,
+                          onTap: () => _togglePageSelection(index),
+                          imageBytes: _thumbnailCache[index],
+                          isLoading: _loadingPages.contains(index),
+                        );
+                      },
+                    ),
                   ),
                 ),
                 Container(
@@ -299,12 +389,16 @@ class _PageThumbnailWidget extends StatefulWidget {
   final int pageIndex;
   final bool isSelected;
   final VoidCallback onTap;
+  final Uint8List? imageBytes;
+  final bool isLoading;
 
   const _PageThumbnailWidget({
     required this.pageNumber,
     required this.pageIndex,
     required this.isSelected,
     required this.onTap,
+    this.imageBytes,
+    this.isLoading = false,
   });
 
   @override
@@ -347,27 +441,43 @@ class _PageThumbnailWidgetState extends State<_PageThumbnailWidget>
                       topLeft: Radius.circular(7),
                       topRight: Radius.circular(7),
                     ),
-                    child: Container(
-                      color: Colors.grey[100],
-                      child: Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: widget.isSelected 
-                                ? const Color(0xFFE53935).withOpacity(0.1)
-                                : Colors.grey[200],
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Icon(
-                            Icons.picture_as_pdf,
-                            color: widget.isSelected 
-                                ? const Color(0xFFE53935)
-                                : Colors.grey[600],
-                            size: 32,
-                          ),
-                        ),
-                      ),
-                    ),
+                    child: widget.imageBytes != null
+                        ? _buildThumbnailImage(widget.imageBytes!)
+                        : widget.isLoading
+                            ? Container(
+                                color: Colors.grey[100],
+                                child: const Center(
+                                  child: SizedBox(
+                                    width: 20,
+                                    height: 20,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+                                    ),
+                                  ),
+                                ),
+                              )
+                            : Container(
+                                color: Colors.grey[100],
+                                child: Center(
+                                  child: Container(
+                                    padding: const EdgeInsets.all(8),
+                                    decoration: BoxDecoration(
+                                      color: widget.isSelected 
+                                          ? const Color(0xFFE53935).withOpacity(0.1)
+                                          : Colors.grey[200],
+                                      borderRadius: BorderRadius.circular(4),
+                                    ),
+                                    child: Icon(
+                                      Icons.picture_as_pdf,
+                                      color: widget.isSelected 
+                                          ? const Color(0xFFE53935)
+                                          : Colors.grey[600],
+                                      size: 32,
+                                    ),
+                                  ),
+                                ),
+                              ),
                   ),
                 ),
                 Padding(
@@ -415,4 +525,54 @@ class _PageThumbnailWidgetState extends State<_PageThumbnailWidget>
       ),
     );
   }
+
+  Widget _buildThumbnailImage(Uint8List imageBytes) {
+    return FutureBuilder<ui.Image>(
+      future: _decodeImage(imageBytes),
+      builder: (context, snapshot) {
+        if (snapshot.hasData && snapshot.data != null) {
+          return CustomPaint(
+            painter: _ImagePainter(snapshot.data!),
+            child: Container(),
+          );
+        }
+        return Container(
+          color: Colors.grey[100],
+          child: const Center(
+            child: SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<ui.Image> _decodeImage(Uint8List bytes) async {
+    final codec = await ui.instantiateImageCodec(bytes);
+    final frame = await codec.getNextFrame();
+    return frame.image;
+  }
+}
+
+class _ImagePainter extends CustomPainter {
+  final ui.Image image;
+
+  _ImagePainter(this.image);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint();
+    final srcRect = Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble());
+    final dstRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    canvas.drawImageRect(image, srcRect, dstRect, paint);
+  }
+
+  @override
+  bool shouldRepaint(_ImagePainter oldDelegate) => oldDelegate.image != image;
 }

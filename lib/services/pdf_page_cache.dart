@@ -97,17 +97,18 @@ class PDFPageCache {
     
     if (_cacheDir != null) {
       // Clear disk cache for this file
-      _cacheDir!.list().then((files) {
-        for (var file in files) {
+      _cacheDir!.list().listen(
+        (file) {
           if (file.path.contains(_getFileHash(filePath))) {
             file.delete().catchError((e) {
               debugPrint('Error deleting cache file: $e');
             });
           }
-        }
-      }).catchError((e) {
-        debugPrint('Error clearing disk cache: $e');
-      });
+        },
+        onError: (e) {
+          debugPrint('Error clearing disk cache: $e');
+        },
+      );
     }
   }
 
@@ -116,15 +117,16 @@ class PDFPageCache {
     _memoryCache.clear();
     
     if (_cacheDir != null) {
-      _cacheDir!.list().then((files) {
-        for (var file in files) {
+      _cacheDir!.list().listen(
+        (file) {
           file.delete().catchError((e) {
             debugPrint('Error deleting cache file: $e');
           });
-        }
-      }).catchError((e) {
-        debugPrint('Error clearing disk cache: $e');
-      });
+        },
+        onError: (e) {
+          debugPrint('Error clearing disk cache: $e');
+        },
+      );
     }
   }
 

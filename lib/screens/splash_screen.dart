@@ -2861,8 +2861,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
               }
 
               try {
-                // Ensure PDF is in app storage first
-                final actualFilePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+                // Use the actual file path (already ensured to be in app storage)
                 final oldFile = io.File(actualFilePath);
                 
                 if (!await oldFile.exists()) {

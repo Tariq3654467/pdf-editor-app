@@ -9,6 +9,7 @@ import '../services/pdf_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../widgets/in_app_file_picker.dart';
 import 'pdf_viewer_screen.dart';
+import 'merge_pdf_screen.dart';
 
 class ToolsScreen extends StatefulWidget {
   final VoidCallback? onOperationComplete;
@@ -450,105 +451,16 @@ class _ToolsScreenState extends State<ToolsScreen> {
   Future<void> _mergePDF() async {
     if (_isProcessing) return;
 
-    // Show in-app file picker with multi-select
-    final selectedFiles = await Navigator.of(context).push<List<String>>(
+    // Navigate to merge PDF screen
+    final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
-        builder: (context) => const InAppFilePicker(
-          allowMultiSelect: true,
-          title: 'Select PDFs to Merge',
-        ),
+        builder: (context) => const MergePDFScreen(),
       ),
     );
 
-    if (selectedFiles == null || selectedFiles.isEmpty) return;
-    if (selectedFiles.length < 2) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Please select at least 2 PDFs to merge'),
-          ),
-        );
-      }
-      return;
-    }
-
-    setState(() => _isProcessing = true);
-
-    try {
-      final mergedPath = await PDFToolsService.mergePDFs(selectedFiles);
-      if (mergedPath != null) {
-        // Save to history
-        await PDFPreferencesService.addToolsHistory(
-          'merge',
-          selectedFiles.first,
-          resultPath: mergedPath,
-        );
-        
-        // Trigger refresh of file list BEFORE navigating
-        // This ensures the merged file appears in the list when user returns
-        widget.onOperationComplete?.call();
-        
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('PDFs merged successfully! File saved in app storage and will appear in your file list.'),
-              duration: Duration(seconds: 3),
-            ),
-          );
-          
-          // Navigate to merged PDF (optional - user can view it)
-          final result = await Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => PDFViewerScreen(
-                filePath: mergedPath,
-                fileName: 'Merged PDF.pdf',
-              ),
-            ),
-          );
-          
-          // Refresh file list when returning from PDF viewer
-          if (result == true || mounted) {
-            widget.onOperationComplete?.call();
-          }
-        }
-      } else {
-        // PHASE 5: User-friendly error message
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Failed to merge PDFs. One or more PDFs may be corrupted or too large.'),
-              backgroundColor: Colors.red,
-              duration: Duration(seconds: 4),
-            ),
-          );
-        }
-      }
-    } catch (e) {
-      // PHASE 5: User-friendly error with retry
-      if (mounted) {
-        final errorMessage = e.toString().contains('timeout')
-            ? 'Merge operation timed out. The PDFs may be too large. Please try with smaller PDFs.'
-            : e.toString().contains('permission')
-                ? 'Permission denied. Please grant storage access in settings.'
-                : 'An error occurred while merging PDFs. Please try again.';
-        
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage),
-            backgroundColor: Colors.red,
-            duration: const Duration(seconds: 4),
-            action: SnackBarAction(
-              label: 'Retry',
-              textColor: Colors.white,
-              onPressed: () => _mergePDF(),
-            ),
-          ),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isProcessing = false);
-      }
+    // Refresh file list when returning from merge screen
+    if (result == true && mounted) {
+      widget.onOperationComplete?.call();
     }
   }
 

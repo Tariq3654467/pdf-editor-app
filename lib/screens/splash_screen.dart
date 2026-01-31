@@ -1609,91 +1609,70 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     
     final paginatedPDFs = _getPaginatedPDFs();
     
-    // Fixed 2-column grid layout to match reference design
-    final crossAxisCount = 2;
-    final spacing = 8.0; // Reduced spacing to fit more files on screen
-    final aspectRatio = 0.65; // Optimized for card proportions (60% top, 40% bottom)
-    
-    return CustomScrollView(
+    return ListView(
       controller: _scrollController,
-      slivers: [
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      children: [
         // Tools History Section (only on "My file" tab)
         if (_selectedTabIndex == 0 && _toolsHistory.isNotEmpty)
-          SliverToBoxAdapter(
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Theme.of(context).dividerColor.withOpacity(0.5),
+          Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.5),
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Recent Tools Activity',
+                      style: TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Theme.of(context).brightness == Brightness.dark
+                            ? Colors.white
+                            : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
+                      ),
+                    ),
+                    TextButton(
+                      onPressed: () async {
+                        await PDFPreferencesService.clearToolsHistory();
+                        await _loadToolsHistory();
+                      },
+                      child: const Text(
+                        'Clear',
+                        style: TextStyle(fontSize: 12),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(
-                        'Recent Tools Activity',
-                        style: TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).brightness == Brightness.dark
-                              ? Colors.white
-                              : Theme.of(context).textTheme.titleMedium?.color ?? Colors.black87,
-                        ),
-                      ),
-                      TextButton(
-                        onPressed: () async {
-                          await PDFPreferencesService.clearToolsHistory();
-                          await _loadToolsHistory();
-                        },
-                        child: const Text(
-                          'Clear',
-                          style: TextStyle(fontSize: 12),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
-                ],
-              ),
+                const SizedBox(height: 8),
+                ..._toolsHistory.take(5).map((item) => _buildHistoryItem(item)),
+              ],
             ),
           ),
-        // PDF Grid (paginated)
-        SliverPadding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          sliver: SliverGrid(
-            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: crossAxisCount,
-              crossAxisSpacing: spacing,
-              mainAxisSpacing: spacing,
-              childAspectRatio: aspectRatio,
-            ),
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                if (index >= paginatedPDFs.length) {
-                  return null;
-                }
-                return _buildPDFGridCard(paginatedPDFs[index]);
-              },
-              childCount: paginatedPDFs.length,
-            ),
-          ),
-        ),
+        // PDF List (vertical list matching reference design)
+        ...paginatedPDFs.map((pdf) => Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: _buildPDFListCard(pdf),
+        )),
         // Load more indicator
         if (_hasMoreItems())
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
-                ),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
               ),
             ),
           ),
@@ -1827,77 +1806,59 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     final paginatedFolders = folders.take(endIndex).toList();
     final hasMore = folders.length > endIndex;
     
-    // Fixed 2-column grid layout to match reference design
-    final crossAxisCount = 2;
-    final spacing = 8.0; // Reduced spacing to match main grid
-    final aspectRatio = 0.65; // Match main grid aspect ratio
-    
-    return CustomScrollView(
+    return ListView(
       controller: _scrollController,
-      slivers: [
+      padding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 8,
+      ),
+      children: [
         ...paginatedFolders.map((folder) {
-          return SliverToBoxAdapter(
-            child: Container(
-              margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              decoration: BoxDecoration(
-                color: Theme.of(context).cardColor,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Theme.of(context).dividerColor.withOpacity(0.5),
+          return Container(
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+              color: Theme.of(context).cardColor,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: Theme.of(context).dividerColor.withOpacity(0.5),
+              ),
+            ),
+            child: ExpansionTile(
+              leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
+              title: Text(
+                folder.folderName,
+                style: TextStyle(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white
+                      : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
                 ),
               ),
-              child: ExpansionTile(
-                leading: const Icon(Icons.folder, color: Color(0xFFE53935)),
-                title: Text(
-                  folder.folderName,
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white
-                        : Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
+              subtitle: Text(
+                '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
+                style: TextStyle(
+                  color: Theme.of(context).brightness == Brightness.dark
+                      ? Colors.white70
+                      : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
+                  fontSize: 12,
                 ),
-                subtitle: Text(
-                  '${folder.count} ${folder.count == 1 ? 'file' : 'files'} • ${folder.formattedSize}',
-                  style: TextStyle(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? Colors.white70
-                        : Theme.of(context).textTheme.bodySmall?.color ?? Colors.black54,
-                    fontSize: 12,
-                  ),
-                ),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.all(8.0),
-                    child: GridView.builder(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: crossAxisCount,
-                        crossAxisSpacing: spacing,
-                        mainAxisSpacing: spacing,
-                        childAspectRatio: aspectRatio,
-                      ),
-                      itemCount: folder.pdfs.length,
-                      itemBuilder: (context, index) {
-                        return _buildPDFGridCard(folder.pdfs[index]);
-                      },
-                    ),
-                  ),
-                ],
               ),
+              children: folder.pdfs.map((pdf) {
+                return Padding(
+                  padding: const EdgeInsets.only(left: 16, right: 16, bottom: 8),
+                  child: _buildPDFListCard(pdf),
+                );
+              }).toList(),
             ),
           );
         }).toList(),
         if (hasMore)
-          const SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Center(
-                child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
-                ),
+          const Padding(
+            padding: EdgeInsets.all(16.0),
+            child: Center(
+              child: CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
               ),
             ),
           ),
@@ -1951,6 +1912,134 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
         ),
       );
     }).toList();
+  }
+
+  Widget _buildPDFListCard(PDFFile pdf) {
+    return GestureDetector(
+      onTap: () async {
+        if (pdf.filePath != null) {
+          // Ensure PDF is in app storage (copy if external)
+          final filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+          
+          // Track that this PDF was accessed
+          await PDFPreferencesService.setLastAccessed(filePath);
+          
+          // Navigate to PDF viewer
+          final result = await Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => PDFViewerScreen(
+                filePath: filePath,
+                fileName: pdf.name,
+              ),
+            ),
+          );
+          
+          // Reload PDFs when returning from PDF viewer
+          if (mounted) {
+            await Future.delayed(const Duration(milliseconds: 500));
+            await _reloadPDFsAfterOperation();
+          }
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF file path not available'),
+            ),
+          );
+        }
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(12),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.05),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
+        ),
+        child: ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          leading: Container(
+            width: 50,
+            height: 50,
+            decoration: BoxDecoration(
+              color: const Color(0xFFE53935),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: const Center(
+              child: Text(
+                'PDF',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ),
+          title: Text(
+            pdf.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: Color(0xFF263238),
+              fontSize: 15,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          subtitle: Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '${pdf.date} • ${pdf.size}',
+              style: const TextStyle(
+                color: Color(0xFF9E9E9E),
+                fontSize: 12,
+              ),
+            ),
+          ),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                onPressed: () async {
+                  final newBookmarkStatus = !pdf.isFavorite;
+                  
+                  if (pdf.filePath != null) {
+                    await PDFPreferencesService.setBookmark(
+                      pdf.filePath!,
+                      newBookmarkStatus,
+                    );
+                  }
+                  
+                  setState(() {
+                    final index = pdfFiles.indexWhere((p) => p.filePath == pdf.filePath);
+                    if (index != -1) {
+                      pdfFiles[index].isFavorite = newBookmarkStatus;
+                      PDFCacheService.updatePDFInCache(pdfFiles[index]);
+                    }
+                  });
+                },
+                icon: Icon(
+                  pdf.isFavorite ? Icons.star : Icons.star_outline,
+                  color: const Color(0xFFE53935),
+                  size: 22,
+                ),
+              ),
+              IconButton(
+                onPressed: () => _showPDFOptionsMenu(context, pdf),
+                icon: Icon(
+                  Icons.more_vert,
+                  color: const Color(0xFF9E9E9E),
+                  size: 22,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildPDFGridCard(PDFFile pdf) {
@@ -2384,69 +2473,205 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
 
   Future<void> _sharePDF(PDFFile pdf) async {
     try {
-      if (pdf.filePath != null) {
-        if (kIsWeb) {
-          // On web, share without file existence check
-          await Share.share(pdf.filePath!, subject: pdf.name);
-          return;
-        }
-        
-        final file = io.File(pdf.filePath!);
-        if (await file.exists()) {
-          await Share.shareXFiles(
-            [XFile(pdf.filePath!)],
-            text: 'Check out this PDF: ${pdf.name}',
-          );
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('PDF file not found'),
+      if (pdf.filePath == null) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'PDF file path not available',
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                ),
               ),
-            );
-          }
+              backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                               (Theme.of(context).brightness == Brightness.dark 
+                                   ? Colors.grey[800] 
+                                   : Colors.grey[300]),
+            ),
+          );
+        }
+        return;
+      }
+
+      if (kIsWeb) {
+        // On web, share without file existence check
+        await Share.share(pdf.filePath!, subject: pdf.name);
+        return;
+      }
+      
+      // Show loading indicator
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+            ),
+          ),
+        );
+      }
+      
+      // Ensure PDF is in app storage (copy if external or content URI)
+      final filePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+      final file = io.File(filePath);
+      
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+      }
+      
+      if (await file.exists()) {
+        await Share.shareXFiles(
+          [XFile(filePath)],
+          text: 'Check out this PDF: ${pdf.name}',
+        );
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'PDF file not found or cannot be accessed',
+                style: TextStyle(
+                  color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                ),
+              ),
+              backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                               (Theme.of(context).brightness == Brightness.dark 
+                                   ? Colors.grey[800] 
+                                   : Colors.grey[300]),
+            ),
+          );
         }
       }
     } catch (e) {
       if (mounted) {
+        // Close loading dialog if still open
+        try {
+          Navigator.pop(context);
+        } catch (_) {}
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error sharing PDF: $e'),
+            content: Text(
+              'Error sharing PDF: $e',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+              ),
+            ),
+            backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                             (Theme.of(context).brightness == Brightness.dark 
+                                 ? Colors.grey[800] 
+                                 : Colors.grey[300]),
           ),
         );
       }
     }
   }
 
-  void _deletePDF(PDFFile pdf) {
+  void _deletePDF(PDFFile pdf) async {
     if (pdf.filePath == null) return;
+
+    // Ensure PDF is in app storage first to get the actual file path
+    String? actualFilePath;
+    try {
+      actualFilePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error accessing PDF file: $e',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+              ),
+            ),
+            backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                             (Theme.of(context).brightness == Brightness.dark 
+                                 ? Colors.grey[800] 
+                                 : Colors.grey[300]),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (actualFilePath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'PDF file not found',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+              ),
+            ),
+            backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                             (Theme.of(context).brightness == Brightness.dark 
+                                 ? Colors.grey[800] 
+                                 : Colors.grey[300]),
+          ),
+        );
+      }
+      return;
+    }
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Delete PDF'),
-        content: Text('Are you sure you want to delete "${pdf.name}"?'),
+        backgroundColor: Theme.of(context).dialogBackgroundColor,
+        title: Text(
+          'Delete PDF',
+          style: TextStyle(
+            color: Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
+          ),
+        ),
+        content: Text(
+          'Are you sure you want to delete "${pdf.name}"?',
+          style: TextStyle(
+            color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black87,
+          ),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(
+              'Cancel',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black87,
+              ),
+            ),
           ),
           TextButton(
             onPressed: () async {
               try {
-                final file = io.File(pdf.filePath!);
+                final file = io.File(actualFilePath!);
                 if (await file.exists()) {
                   await file.delete();
+                  // Remove from cache
+                  await PDFCacheService.removePDFFromCache(pdf.filePath!);
                   // Remove from bookmarks
                   await PDFPreferencesService.setBookmark(pdf.filePath!, false);
-                  // Reload PDFs
+                  // Remove from recent access
+                  final recentAccess = await PDFPreferencesService.getRecentAccess();
+                  recentAccess.remove(pdf.filePath!);
+                  // Reload PDFs to refresh UI
+                  await _loadPDFs();
+                } else {
+                  // File doesn't exist, but remove from cache anyway
+                  await PDFCacheService.removePDFFromCache(pdf.filePath!);
+                  await PDFPreferencesService.setBookmark(pdf.filePath!, false);
                   await _loadPDFs();
                 }
                 if (mounted) {
                   Navigator.pop(context); // Close dialog
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('PDF deleted successfully'),
+                    SnackBar(
+                      content: Text(
+                        'PDF deleted successfully',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
                     ),
                   );
                 }
@@ -2455,7 +2680,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Error deleting PDF: $e'),
+                      content: Text(
+                        'Error deleting PDF: $e',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
                     ),
                   );
                 }
@@ -2469,81 +2699,218 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     );
   }
 
-  void _renamePDF(PDFFile pdf) {
+  void _renamePDF(PDFFile pdf) async {
     if (pdf.filePath == null) return;
 
+    // Show loading indicator
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+          ),
+        ),
+      );
+    }
+
+    // Ensure PDF is in app storage first to get the actual file path
+    String? actualFilePath;
+    try {
+      actualFilePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+      
+      // Verify the file exists
+      if (actualFilePath != null) {
+        final file = io.File(actualFilePath);
+        if (!await file.exists()) {
+          actualFilePath = null;
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Error accessing PDF file: $e',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+              ),
+            ),
+            backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                             (Theme.of(context).brightness == Brightness.dark 
+                                 ? Colors.grey[800] 
+                                 : Colors.grey[300]),
+          ),
+        );
+      }
+      return;
+    }
+
+    if (mounted) {
+      Navigator.pop(context); // Close loading dialog
+    }
+
+    if (actualFilePath == null || actualFilePath.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'PDF file not found or cannot be accessed',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+              ),
+            ),
+            backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                             (Theme.of(context).brightness == Brightness.dark 
+                                 ? Colors.grey[800] 
+                                 : Colors.grey[300]),
+          ),
+        );
+      }
+      return;
+    }
+
     final nameController = TextEditingController(
-      text: path.basenameWithoutExtension(pdf.filePath!),
+      text: path.basenameWithoutExtension(actualFilePath),
     );
 
     showDialog(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Rename PDF'),
+        backgroundColor: Theme.of(context).dialogBackgroundColor,
+        title: Text(
+          'Rename PDF',
+          style: TextStyle(
+            color: Theme.of(context).textTheme.titleLarge?.color ?? Colors.black87,
+          ),
+        ),
         content: TextField(
           controller: nameController,
           autofocus: true,
-          decoration: const InputDecoration(
+          style: TextStyle(
+            color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black87,
+          ),
+          decoration: InputDecoration(
             hintText: 'Enter new name',
-            border: OutlineInputBorder(),
+            hintStyle: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color ?? Colors.grey,
+            ),
+            border: const OutlineInputBorder(),
             suffixText: '.pdf',
+            suffixStyle: TextStyle(
+              color: Theme.of(context).textTheme.bodySmall?.color ?? Colors.grey,
+            ),
           ),
           textCapitalization: TextCapitalization.words,
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
+            child: Text(
+              'Cancel',
+              style: TextStyle(
+                color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black87,
+              ),
+            ),
           ),
           TextButton(
             onPressed: () async {
               final newName = nameController.text.trim();
               
               if (newName.isEmpty) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Please enter a valid name'),
-                  ),
-                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Please enter a valid name',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                       (Theme.of(context).brightness == Brightness.dark 
+                                           ? Colors.grey[800] 
+                                           : Colors.grey[300]),
+                    ),
+                  );
+                }
                 return;
               }
 
               // Validate name (no invalid characters)
               if (newName.contains(RegExp(r'[<>:"/\\|?*]'))) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Name contains invalid characters'),
-                  ),
-                );
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Name contains invalid characters',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                       (Theme.of(context).brightness == Brightness.dark 
+                                           ? Colors.grey[800] 
+                                           : Colors.grey[300]),
+                    ),
+                  );
+                }
                 return;
               }
 
               try {
-                final oldFile = io.File(pdf.filePath!);
+                // Ensure PDF is in app storage first
+                final actualFilePath = await PDFStorageService.ensureInAppStorage(pdf.filePath!);
+                final oldFile = io.File(actualFilePath);
+                
                 if (!await oldFile.exists()) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('PDF file not found'),
-                    ),
-                  );
+                  if (context.mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'PDF file not found',
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                          ),
+                        ),
+                        backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                         (Theme.of(context).brightness == Brightness.dark 
+                                             ? Colors.grey[800] 
+                                             : Colors.grey[300]),
+                      ),
+                    );
+                  }
                   return;
                 }
 
                 // Get directory and create new path
-                final directory = path.dirname(pdf.filePath!);
+                final directory = path.dirname(actualFilePath);
                 final newFileName = '$newName.pdf';
                 final newPath = path.join(directory, newFileName);
 
                 // Check if file with new name already exists
                 final targetFile = io.File(newPath);
-                if (await targetFile.exists() && newPath != pdf.filePath) {
-                  Navigator.pop(context);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('A file with this name already exists'),
-                    ),
-                  );
+                if (await targetFile.exists() && newPath != actualFilePath) {
+                  if (context.mounted) {
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text(
+                          'A file with this name already exists',
+                          style: TextStyle(
+                            color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                          ),
+                        ),
+                        backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                         (Theme.of(context).brightness == Brightness.dark 
+                                             ? Colors.grey[800] 
+                                             : Colors.grey[300]),
+                      ),
+                    );
+                  }
                   return;
                 }
 
@@ -2595,8 +2962,17 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                 if (mounted) {
                   Navigator.pop(context); // Close dialog
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('PDF renamed successfully'),
+                    SnackBar(
+                      content: Text(
+                        'PDF renamed successfully',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                       (Theme.of(context).brightness == Brightness.dark 
+                                           ? Colors.grey[800] 
+                                           : Colors.grey[300]),
                     ),
                   );
                 }
@@ -2605,13 +2981,27 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
                   Navigator.pop(context);
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text('Error renaming PDF: $e'),
+                      content: Text(
+                        'Error renaming PDF: $e',
+                        style: TextStyle(
+                          color: Theme.of(context).textTheme.bodyLarge?.color ?? Colors.white,
+                        ),
+                      ),
+                      backgroundColor: Theme.of(context).snackBarTheme.backgroundColor ?? 
+                                       (Theme.of(context).brightness == Brightness.dark 
+                                           ? Colors.grey[800] 
+                                           : Colors.grey[300]),
                     ),
                   );
                 }
               }
             },
-            child: const Text('Rename'),
+            child: Text(
+              'Rename',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.primary,
+              ),
+            ),
           ),
         ],
       ),

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/services.dart';
 import '../models/pdf_file.dart';
 import 'pdf_service.dart';
 import 'pdf_preferences_service.dart';
@@ -10,6 +11,7 @@ import 'pdf_cache_service.dart';
 /// Service for managing all PDFs in app-specific storage
 /// This ensures all files are managed internally, no external file manager dependency
 class PDFStorageService {
+  static const MethodChannel _fileChannel = MethodChannel('com.example.pdf_editor_app/file_intent');
   /// Get app's PDF directory (where all PDFs are stored)
   static Future<Directory> getAppPDFDirectory() async {
     final directory = await getApplicationDocumentsDirectory();
@@ -22,10 +24,107 @@ class PDFStorageService {
     return pdfDirectory;
   }
   
+  /// Copy content URI to app storage
+  static Future<String?> _copyContentUriToAppStorage(String contentUri) async {
+    try {
+      if (kIsWeb) return null;
+      
+      print('PDFStorageService: Copying content URI: $contentUri');
+      final String? tempPath = await _fileChannel.invokeMethod('copyContentUriToCache', contentUri)
+          .timeout(
+            const Duration(seconds: 15),
+            onTimeout: () {
+              print('PDFStorageService: Content URI copy timeout');
+              return null;
+            },
+          )
+          .catchError((e) {
+            print('PDFStorageService: Error copying content URI: $e');
+            return null;
+          });
+      
+      if (tempPath == null) {
+        print('PDFStorageService: Failed to copy content URI');
+        return null;
+      }
+      
+      // Now copy from temp cache to app PDF directory
+      final tempFile = File(tempPath);
+      if (!await tempFile.exists()) {
+        print('PDFStorageService: Copied file does not exist: $tempPath');
+        return null;
+      }
+      
+      final pdfDirectory = await getAppPDFDirectory();
+      final fileName = path.basename(tempPath);
+      
+      // Handle duplicate names
+      var targetPath = path.join(pdfDirectory.path, fileName);
+      var targetFile = File(targetPath);
+      int counter = 1;
+      
+      while (await targetFile.exists()) {
+        final nameWithoutExt = path.basenameWithoutExtension(fileName);
+        final ext = path.extension(fileName);
+        final newFileName = '${nameWithoutExt}_$counter$ext';
+        targetPath = path.join(pdfDirectory.path, newFileName);
+        targetFile = File(targetPath);
+        counter++;
+      }
+      
+      // Copy from temp to app storage
+      await tempFile.copy(targetPath);
+      
+      // Create PDFFile object and add to cache
+      final stat = await targetFile.stat();
+      final pdfFile = PDFFile(
+        name: path.basename(targetPath),
+        date: PDFService.formatDate(stat.modified),
+        size: PDFService.formatFileSize(stat.size),
+        isFavorite: false,
+        filePath: targetPath,
+        lastAccessed: DateTime.now(),
+        folderPath: pdfDirectory.path,
+        folderName: 'App Files',
+        dateModified: stat.modified,
+        fileSizeBytes: stat.size,
+      );
+      
+      // Verify file exists before updating cache
+      if (!await targetFile.exists()) {
+        print('PDFStorageService: ERROR - File was not copied: $targetPath');
+        return null;
+      }
+      
+      final actualFileSize = await targetFile.length();
+      if (actualFileSize == 0) {
+        print('PDFStorageService: ERROR - Copied file is empty: $targetPath');
+        return null;
+      }
+      
+      print('PDFStorageService: Verified copied file exists: $targetPath (${actualFileSize} bytes)');
+      
+      // Update cache with verified file
+      await PDFCacheService.addPDFToCache(pdfFile);
+      await PDFPreferencesService.setLastAccessed(targetPath);
+      
+      print('PDFStorageService: Copied content URI to app storage: $targetPath');
+      return targetPath;
+    } catch (e) {
+      print('PDFStorageService: Error copying content URI to app storage: $e');
+      return null;
+    }
+  }
+
   /// Copy external PDF to app storage
   /// Returns the new path in app storage
   static Future<String?> copyToAppStorage(String sourcePath) async {
     try {
+      // Handle content URIs
+      if (sourcePath.startsWith('content://')) {
+        return await _copyContentUriToAppStorage(sourcePath);
+      }
+      
       final sourceFile = File(sourcePath);
       if (!await sourceFile.exists()) {
         print('PDFStorageService: Source file does not exist: $sourcePath');

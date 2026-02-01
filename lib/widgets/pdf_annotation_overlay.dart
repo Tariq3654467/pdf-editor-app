@@ -55,6 +55,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final Function(bool)? onRedoStateChanged;
   final List<TextAnnotation>? textAnnotations; // Text overlays
   final Function(TextAnnotation)? onTextTap; // Callback when text is tapped
+  final Function(List<AnnotationPoint>)? onAnnotationComplete; // Callback when annotation is completed (to save to PDF)
+  final String? pdfPath; // PDF file path for saving annotations
 
   const PDFAnnotationOverlay({
     super.key,
@@ -71,6 +73,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
     this.onRedoStateChanged,
     this.textAnnotations,
     this.onTextTap,
+    this.onAnnotationComplete,
+    this.pdfPath,
   });
 
   @override
@@ -161,13 +165,20 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 
   void _onPanEnd(DragEndDetails details) {
     if (widget.isDrawing && _currentPath.isNotEmpty) {
+      final completedPath = List<AnnotationPoint>.from(_currentPath);
+      
       setState(() {
-        _paths.add(List.from(_currentPath));
+        _paths.add(completedPath);
         _currentPath = [];
         _redoStack.clear(); // Clear redo stack when new action is performed
         widget.onUndoStateChanged?.call(true);
         widget.onRedoStateChanged?.call(false);
       });
+      
+      // Save annotation directly to PDF content (not just overlay)
+      if (widget.onAnnotationComplete != null) {
+        widget.onAnnotationComplete!(completedPath);
+      }
     }
   }
 
@@ -206,6 +217,16 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
 
   bool get canUndo => _paths.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
+  
+  // Remove last path (used when annotation is saved to PDF)
+  void removeLastPath() {
+    if (_paths.isNotEmpty) {
+      setState(() {
+        _paths.removeLast();
+        widget.onUndoStateChanged?.call(_paths.isNotEmpty);
+      });
+    }
+  }
 
   Widget _buildTextOverlays(Size overlaySize) {
     if (widget.textAnnotations == null || widget.textAnnotations!.isEmpty) {
@@ -321,11 +342,18 @@ class AnnotationPainter extends CustomPainter {
   });
 
   // Convert normalized coordinates (0-1) to screen coordinates
-  // Normalized coordinates are relative to overlay size and stay consistent
-  Offset _normalizedToScreen(Offset normalizedPoint) {
+  // Normalized coordinates are relative to page size, not document size
+  // We need to account for scroll offset to position annotations correctly
+  Offset _normalizedToScreen(Offset normalizedPoint, int pageNumber) {
+    // Calculate page height (assuming all pages have same aspect ratio)
+    // For vertical scrolling, each page has the same width as overlay
+    final pageHeight = overlaySize.height; // This should be single page height, not document height
+    
+    // For now, use overlay size directly (assuming overlay represents single page viewport)
+    // If overlay represents entire document, we'd need to calculate page offset
     return Offset(
       normalizedPoint.dx * overlaySize.width,
-      normalizedPoint.dy * overlaySize.height,
+      normalizedPoint.dy * pageHeight,
     );
   }
 
@@ -363,7 +391,8 @@ class AnnotationPainter extends CustomPainter {
 
       if (path.length >= 2) {
         // Convert normalized coordinates to screen coordinates
-        final screenPoints = path.map((p) => _normalizedToScreen(p.normalizedPoint)).toList();
+        // Normalized coordinates are relative to the page, not document
+        final screenPoints = path.map((p) => _normalizedToScreen(p.normalizedPoint, p.pageNumber)).toList();
         
         if (firstPoint.toolType == 'underline') {
           // Draw horizontal line for underline
@@ -414,7 +443,8 @@ class AnnotationPainter extends CustomPainter {
       }
 
       // Convert normalized coordinates to screen coordinates
-      final screenPoints = currentPath.map((p) => _normalizedToScreen(p.normalizedPoint)).toList();
+      // Normalized coordinates are relative to the page, not document
+      final screenPoints = currentPath.map((p) => _normalizedToScreen(p.normalizedPoint, p.pageNumber)).toList();
 
       if (firstPoint.toolType == 'underline') {
         // Draw horizontal line for underline

@@ -76,6 +76,35 @@ class PDFService {
   static Future<bool> requestStorageAccess() async {
     return requestSAFAccess();
   }
+  
+  /// Request root-level storage access (MANAGE_EXTERNAL_STORAGE)
+  /// This opens Android Settings for the user to grant permission
+  static Future<bool> requestRootStorageAccess() async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<bool>('requestRootStorageAccess');
+        return result ?? false;
+      } catch (e) {
+        print('PDFService: Error requesting root storage access: $e');
+        return false;
+      }
+    }
+    return false;
+  }
+  
+  /// Check if we have root-level storage access (MANAGE_EXTERNAL_STORAGE)
+  static Future<bool> hasRootStorageAccess() async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<bool>('hasRootStorageAccess');
+        return result ?? false;
+      } catch (e) {
+        print('PDFService: Error checking root storage access: $e');
+        return false;
+      }
+    }
+    return false;
+  }
 
   static Future<List<PDFFile>> loadPDFsFromDevice() async {
     List<PDFFile> pdfFiles = [];

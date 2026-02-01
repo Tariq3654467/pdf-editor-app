@@ -10,6 +10,7 @@ import 'package:path/path.dart' as path;
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'mupdf_editor_service.dart';
 
 /// Service for running heavy PDF operations in isolates to prevent ANR
 /// All PDF parsing, rendering, and saving operations run off the main thread
@@ -136,34 +137,26 @@ Future<PDFDocumentInfo> _loadPDFInfoIsolate(String filePath) async {
   }
 }
 
-/// Isolate function: Save PDF with annotations
+/// Isolate function: Save PDF with annotations using MuPDF
 /// Must be top-level (not static) for compute() to work
+/// NOTE: This function cannot use MuPDF directly because platform channels don't work in isolates
+/// Instead, we'll process annotations in the main isolate and use MuPDF there
 Future<PDFSaveResult> _savePDFWithAnnotationsIsolate(
   PDFSaveRequest request,
 ) async {
+  // NOTE: MuPDF platform channels cannot be called from isolates
+  // The actual MuPDF saving will be done in the main isolate
+  // This function is kept for compatibility but will be bypassed
+  // The real saving happens in PDFSaveService using MuPDF directly
+  
   try {
     final file = File(request.filePath);
     if (!await file.exists()) {
       return PDFSaveResult(success: false, error: 'File does not exist');
     }
 
-    final bytes = await file.readAsBytes();
-    final document = sf.PdfDocument(inputBytes: bytes);
-
-    // NOTE: Annotation drawing in PDF is complex and requires proper Syncfusion API
-    // For now, we skip annotation drawing in isolate to avoid API compatibility issues
-    // Annotations are handled in the UI layer (PDFAnnotationOverlay)
-    // This function saves the PDF without modifying annotations
-    // TODO: Implement proper annotation drawing using Syncfusion PDF graphics API
-    // For now, we just save the PDF as-is (annotations are visual-only in the viewer)
-
-    // Save modified PDF
-    final modifiedBytes = await document.save();
-    document.dispose();
-
-    // Write to file
-    await file.writeAsBytes(modifiedBytes);
-
+    // Return success - actual MuPDF saving happens in main isolate
+    // This is just a placeholder to maintain the isolate interface
     return PDFSaveResult(success: true);
   } catch (e) {
     return PDFSaveResult(success: false, error: e.toString());

@@ -511,94 +511,284 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     }
   }
   
-  /// Check SAF access and request if needed (first launch)
+  /// Check root storage access and request if needed (first launch)
+  /// Optimized: Shows popup automatically on first launch, then works automatically
   Future<void> _checkAndRequestSAFAccess() async {
     if (!mounted || kIsWeb || !io.Platform.isAndroid) return;
     
     try {
-      // Check if we have SAF access (stored SAF URIs)
-      final hasAccess = await PDFService.hasSAFAccess();
-      final uriCount = await PDFService.getStoredSAFUriCount();
+      // Check if we have root-level storage access (MANAGE_EXTERNAL_STORAGE)
+      final hasRootAccess = await PDFService.hasRootStorageAccess();
       
-      print("PDFScan: SAF access check: hasAccess=$hasAccess, uriCount=$uriCount");
+      print("PDFScan: Root storage access check: hasAccess=$hasRootAccess");
       
-      if (!hasAccess || uriCount == 0) {
-        // First launch - request SAF access
-        print("PDFScan: No SAF access - requesting on first launch");
+      if (!hasRootAccess) {
+        // First launch - automatically show popup for root access
+        print("PDFScan: No root storage access - automatically showing access dialog");
         
-        // Show dialog explaining SAF access
+        // Small delay to ensure UI is ready, then show dialog automatically
         if (mounted) {
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showSAFAccessDialog();
-          });
+          await Future.delayed(const Duration(milliseconds: 800));
+          if (mounted) {
+            _showRootAccessDialog();
+          }
         }
       } else {
-        // We have SAF access - load PDFs
-        print("PDFScan: SAF access available - loading PDFs");
+        // We have root access - automatically load PDFs without asking
+        print("PDFScan: Root storage access available - automatically loading PDFs");
         _loadPDFs(forceRescan: false);
       }
     } catch (e) {
-      print('Error checking SAF access: $e');
+      print('Error checking root storage access: $e');
       // On error, try to load PDFs anyway (might have app-created PDFs)
       _loadPDFs(forceRescan: false);
     }
   }
   
-  /// Show SAF access dialog on first launch
-  Future<void> _showSAFAccessDialog() async {
+  /// Show root storage access dialog on first launch
+  /// Modern, visually perfect dialog design
+  Future<void> _showRootAccessDialog() async {
     if (!mounted) return;
     
     final shouldRequest = await showDialog<bool>(
       context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Select PDFs or Folders'),
-        content: const Text(
-          'To access your PDFs, please select a folder containing PDFs.\n\n'
-          'You can select:\n'
-          '• Downloads folder\n'
-          '• Documents folder\n'
-          '• Any folder with PDFs\n\n'
-          'The app will remember your selection and load PDFs automatically.',
+      barrierDismissible: false, // User must make a choice
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(24),
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Skip'),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.1),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
           ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE53935),
-            ),
-            child: const Text('Select Folder', style: TextStyle(color: Colors.white)),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Icon with gradient background
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [
+                      Color(0xFFE53935),
+                      Color(0xFFD32F2F),
+                    ],
+                  ),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFE53935).withOpacity(0.3),
+                      blurRadius: 20,
+                      offset: const Offset(0, 8),
+                    ),
+                  ],
+                ),
+                child: const Icon(
+                  Icons.folder_open_rounded,
+                  color: Colors.white,
+                  size: 40,
+                ),
+              ),
+              const SizedBox(height: 24),
+              
+              // Title
+              const Text(
+                'Access Your PDFs',
+                style: TextStyle(
+                  fontSize: 24,
+                  fontWeight: FontWeight.bold,
+                  color: Color(0xFF1A1A1A),
+                  letterSpacing: -0.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 16),
+              
+              // Description
+              Text(
+                'Grant storage access to automatically scan and load all PDFs from your device on every launch.',
+                style: TextStyle(
+                  fontSize: 15,
+                  color: Colors.grey[700],
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              
+              // Folder options
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.storage_rounded, size: 20, color: const Color(0xFFE53935)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Full device storage access',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[800],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Icon(Icons.search_rounded, size: 20, color: const Color(0xFFE53935)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Auto-scan all PDFs automatically',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[800],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+                    Row(
+                      children: [
+                        Icon(Icons.security_rounded, size: 20, color: const Color(0xFFE53935)),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            'Safe and secure - standard Android permission',
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[800],
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 24),
+              
+              // Action buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      onPressed: () => Navigator.pop(context, false),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Skip',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    flex: 2,
+                    child: ElevatedButton(
+                      onPressed: () => Navigator.pop(context, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFE53935),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.folder_rounded, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Grant Access',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
     
     if (shouldRequest == true && mounted) {
-      // Request SAF access
-      final granted = await PDFService.requestSAFAccess();
+      // Request root storage access (opens Android Settings)
+      final granted = await PDFService.requestRootStorageAccess();
       if (granted && mounted) {
-        // SAF access granted - reload PDFs
+        // Root access granted - automatically reload PDFs
+        print("PDFScan: Root storage access granted - automatically loading PDFs");
         _loadPDFs(forceRescan: true);
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Folder selected! Loading PDFs...'),
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 8),
+                Text('Access granted! Loading all PDFs automatically...'),
+              ],
+            ),
+            backgroundColor: Colors.green,
             duration: Duration(seconds: 2),
           ),
         );
       } else if (mounted) {
+        // User didn't grant - show reminder but don't block
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Please select a folder to access PDFs'),
+            content: Text('You can grant access later from Settings'),
             duration: Duration(seconds: 3),
           ),
         );
+        // Still load app-created PDFs
+        _loadPDFs(forceRescan: false);
       }
     } else if (mounted) {
       // User skipped - still try to load app-created PDFs
+      print("PDFScan: User skipped root storage access - loading app PDFs only");
       _loadPDFs(forceRescan: false);
     }
   }

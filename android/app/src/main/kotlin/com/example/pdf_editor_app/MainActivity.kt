@@ -12,6 +12,7 @@ import android.provider.OpenableColumns
 import android.content.ContentResolver
 import android.content.SharedPreferences
 import androidx.core.content.ContextCompat
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -22,6 +23,7 @@ import java.io.InputStream
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.pdf_editor_app/file_intent"
     private val PDF_SCAN_CHANNEL = "com.example.pdf_editor_app/pdf_scan"
+    private val PDF_EDITOR_CHANNEL = "com.example.pdf_editor_app/pdf_editor"
     private val SAF_REQUEST_CODE_TREE = 1001
     private val SAF_REQUEST_CODE_DOCUMENT = 1002
     private var pendingResult: MethodChannel.Result? = null
@@ -80,14 +82,61 @@ class MainActivity : FlutterActivity() {
             }
         }
         
+        // Channel for PDF editing using MuPDF native engine
+        val pdfEditorService = PDFEditorService(
+            MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_EDITOR_CHANNEL)
+        )
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_EDITOR_CHANNEL).setMethodCallHandler { call, result ->
+            pdfEditorService.handleMethodCall(call, result)
+        }
+        
         // Channel for PDF scanning and SAF access
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_SCAN_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanPDFs" -> {
-                    // Scan PDFs from stored SAF URIs (app-managed index)
+                    // Scan PDFs - use root-level scanning if permission granted, otherwise use SAF
                     Thread {
                         try {
-                            val pdfList = scanPDFsFromSAFIndex()
+                            val pdfList = mutableListOf<Map<String, Any>>()
+                            val seenPaths = mutableSetOf<String>()
+                            
+                            // Check if we have root-level storage access
+                            val hasRootAccess = hasRootStorageAccess()
+                            android.util.Log.d("PDFScan", "Scanning PDFs - Root access: $hasRootAccess")
+                            
+                            if (hasRootAccess) {
+                                // Root access granted - use full device scanning
+                                android.util.Log.d("PDFScan", "Using root-level scanning (MANAGE_EXTERNAL_STORAGE)")
+                                
+                                // 1. Scan with MediaStore (fast, finds most PDFs)
+                                val mediaStorePDFs = scanPDFsWithMediaStore()
+                                for (pdf in mediaStorePDFs) {
+                                    val path = pdf["path"] as? String
+                                    if (path != null && !seenPaths.contains(path)) {
+                                        seenPaths.add(path)
+                                        pdfList.add(pdf)
+                                    }
+                                }
+                                
+                                // 2. Also scan directories directly (catches PDFs not in MediaStore)
+                                val directoryPDFs = scanPDFsFromDirectories()
+                                for (pdf in directoryPDFs) {
+                                    val path = pdf["path"] as? String
+                                    if (path != null && !seenPaths.contains(path)) {
+                                        seenPaths.add(path)
+                                        pdfList.add(pdf)
+                                    }
+                                }
+                                
+                                android.util.Log.d("PDFScan", "Root-level scan complete: ${pdfList.size} PDFs (MediaStore: ${mediaStorePDFs.size}, Directories: ${directoryPDFs.size})")
+                            } else {
+                                // No root access - use SAF-based scanning
+                                android.util.Log.d("PDFScan", "Using SAF-based scanning (no root access)")
+                                val safPDFs = scanPDFsFromSAFIndex()
+                                pdfList.addAll(safPDFs)
+                                android.util.Log.d("PDFScan", "SAF scan complete: ${pdfList.size} PDFs")
+                            }
+                            
                             // Post result back on main thread
                             runOnUiThread {
                                 try {
@@ -138,6 +187,16 @@ class MainActivity : FlutterActivity() {
                     // Get count of stored SAF URIs
                     val count = getStoredSAFUriCount()
                     result.success(count)
+                }
+                "requestRootStorageAccess" -> {
+                    // Request MANAGE_EXTERNAL_STORAGE permission (root-level access)
+                    pendingResult = result
+                    requestRootStorageAccess()
+                }
+                "hasRootStorageAccess" -> {
+                    // Check if we have MANAGE_EXTERNAL_STORAGE permission
+                    val hasAccess = hasRootStorageAccess()
+                    result.success(hasAccess)
                 }
                 else -> result.notImplemented()
             }
@@ -225,28 +284,39 @@ class MainActivity : FlutterActivity() {
     private fun requestSAFAccess() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             try {
-                // Use ACTION_OPEN_DOCUMENT_TREE for folder access
-                // This allows user to select a folder containing PDFs
+                // Use ACTION_OPEN_DOCUMENT_TREE for FOLDER access (not file manager)
+                // This specifically requests folder selection, not file selection
                 val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                     flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
                             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                     
-                    // Try to set initial URI to Downloads folder
+                    // Set initial URI to Downloads folder for better UX
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         try {
+                            // Try Downloads folder first
                             val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload")
                             putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
                             android.util.Log.d("PDFScan", "Setting initial URI to Downloads folder")
                         } catch (e: Exception) {
-                            android.util.Log.d("PDFScan", "Could not set initial URI")
+                            android.util.Log.d("PDFScan", "Could not set initial URI: ${e.message}")
+                            // Fallback: try Documents folder
+                            try {
+                                val documentsUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADocuments")
+                                putExtra(DocumentsContract.EXTRA_INITIAL_URI, documentsUri)
+                                android.util.Log.d("PDFScan", "Setting initial URI to Documents folder")
+                            } catch (e2: Exception) {
+                                android.util.Log.d("PDFScan", "Could not set Documents URI either")
+                            }
                         }
                     }
                 }
+                
+                android.util.Log.d("PDFScan", "Requesting folder access via ACTION_OPEN_DOCUMENT_TREE")
                 startActivityForResult(intent, SAF_REQUEST_CODE_TREE)
             } catch (e: Exception) {
-                android.util.Log.e("PDFScan", "Error requesting SAF access", e)
-                pendingResult?.error("REQUEST_ERROR", "Failed to request SAF access: ${e.message}", null)
+                android.util.Log.e("PDFScan", "Error requesting SAF folder access", e)
+                pendingResult?.error("REQUEST_ERROR", "Failed to request folder access: ${e.message}", null)
                 pendingResult = null
             }
         } else {
@@ -264,6 +334,44 @@ class MainActivity : FlutterActivity() {
     // Get count of stored SAF URIs
     private fun getStoredSAFUriCount(): Int {
         return getStoredSAFUriList().size
+    }
+    
+    // Request MANAGE_EXTERNAL_STORAGE permission (root-level access)
+    private fun requestRootStorageAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                // Open Android Settings to grant MANAGE_EXTERNAL_STORAGE
+                val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivityForResult(intent, 1003) // Use different request code
+                android.util.Log.d("PDFScan", "Opening settings for MANAGE_EXTERNAL_STORAGE permission")
+            } catch (e: Exception) {
+                android.util.Log.e("PDFScan", "Error requesting root storage access", e)
+                // Fallback: try general manage all files access
+                try {
+                    val intent = Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+                    startActivityForResult(intent, 1003)
+                } catch (e2: Exception) {
+                    android.util.Log.e("PDFScan", "Error with fallback intent", e2)
+                    pendingResult?.success(false)
+                    pendingResult = null
+                }
+            }
+        } else {
+            // Android 10 and below - no special permission needed
+            pendingResult?.success(true)
+            pendingResult = null
+        }
+    }
+    
+    // Check if we have MANAGE_EXTERNAL_STORAGE permission
+    private fun hasRootStorageAccess(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            true // Android 10 and below have full access
+        }
     }
     
     // Get list of stored SAF URIs from SharedPreferences
@@ -993,6 +1101,15 @@ class MainActivity : FlutterActivity() {
     
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        
+        // Handle root storage access permission result
+        if (requestCode == 1003) {
+            val hasAccess = hasRootStorageAccess()
+            android.util.Log.d("PDFScan", "Root storage access result: $hasAccess")
+            pendingResult?.success(hasAccess)
+            pendingResult = null
+            return
+        }
         
         if (requestCode == SAF_REQUEST_CODE_TREE || requestCode == SAF_REQUEST_CODE_DOCUMENT) {
             if (resultCode == RESULT_OK && data != null) {

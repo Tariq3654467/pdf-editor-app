@@ -125,67 +125,21 @@ class MainActivity : FlutterActivity() {
         val pdfList = mutableListOf<Map<String, Any>>()
         val seenPaths = mutableSetOf<String>()
         
-        android.util.Log.d("PDFScan", "Starting PDF scan...")
+        android.util.Log.d("PDFScan", "Starting PDF scan (permission-less MediaStore only)...")
         
-        // Add timeout protection - Samsung devices can hang on MediaStore queries
         try {
-            // First, try SAF-accessible directories if we have access
-            if (hasStorageAccess()) {
-                try {
-                    val prefs = getSharedPreferences("pdf_editor_prefs", MODE_PRIVATE)
-                    val treeUri = prefs.getString("storage_tree_uri", null)
-                    if (treeUri != null) {
-                        android.util.Log.d("PDFScan", "Scanning SAF-accessible directory...")
-                        val safPDFs = scanPDFsFromSAFUri(Uri.parse(treeUri))
-                        android.util.Log.d("PDFScan", "SAF scan found ${safPDFs.size} PDFs")
-                        for (pdf in safPDFs) {
-                            val path = pdf["path"] as? String
-                            if (path != null && !seenPaths.contains(path)) {
-                                seenPaths.add(path)
-                                pdfList.add(pdf)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("PDFScan", "SAF scan error", e)
-                    e.printStackTrace()
-                }
-            }
+            // ONLY use MediaStore - no permissions required
+            // This works on all Android versions without any storage permissions
+            android.util.Log.d("PDFScan", "Scanning with MediaStore (Android ${Build.VERSION.SDK_INT})")
+            val mediaStorePDFs = scanPDFsWithMediaStore()
+            android.util.Log.d("PDFScan", "MediaStore found ${mediaStorePDFs.size} PDFs")
             
-            // Try MediaStore on all Android versions (works differently on < 10 vs 10+)
-            try {
-                android.util.Log.d("PDFScan", "Scanning with MediaStore (Android ${Build.VERSION.SDK_INT})")
-                val mediaStorePDFs = scanPDFsWithMediaStore()
-                android.util.Log.d("PDFScan", "MediaStore found ${mediaStorePDFs.size} PDFs")
-                for (pdf in mediaStorePDFs) {
-                    val path = pdf["path"] as? String
-                    if (path != null && !seenPaths.contains(path)) {
-                        seenPaths.add(path)
-                        pdfList.add(pdf)
-                    }
+            for (pdf in mediaStorePDFs) {
+                val path = pdf["path"] as? String
+                if (path != null && !seenPaths.contains(path)) {
+                    seenPaths.add(path)
+                    pdfList.add(pdf)
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("PDFScan", "MediaStore scan error", e)
-                e.printStackTrace()
-                // Continue with directory scanning
-            }
-            
-            // Always also try directory scanning as fallback/complement
-            // This ensures we find PDFs even if MediaStore doesn't work on some devices
-            try {
-                android.util.Log.d("PDFScan", "Scanning directories...")
-                val dirPDFs = scanPDFsFromDirectories()
-                android.util.Log.d("PDFScan", "Directory scan found ${dirPDFs.size} PDFs")
-                for (pdf in dirPDFs) {
-                    val path = pdf["path"] as? String
-                    if (path != null && !seenPaths.contains(path)) {
-                        seenPaths.add(path)
-                        pdfList.add(pdf)
-                    }
-                }
-            } catch (e: Exception) {
-                android.util.Log.e("PDFScan", "Directory scan error", e)
-                e.printStackTrace()
             }
         } catch (e: OutOfMemoryError) {
             android.util.Log.e("PDFScan", "Out of memory during scan", e)
@@ -193,7 +147,7 @@ class MainActivity : FlutterActivity() {
             // Return what we have so far
             android.util.Log.d("PDFScan", "Returning ${pdfList.size} PDFs before OOM")
         } catch (e: Exception) {
-            android.util.Log.e("PDFScan", "General scan error", e)
+            android.util.Log.e("PDFScan", "MediaStore scan error", e)
             e.printStackTrace()
         } catch (e: Throwable) {
             android.util.Log.e("PDFScan", "Unexpected error during scan", e)
@@ -209,355 +163,238 @@ class MainActivity : FlutterActivity() {
         val pdfList = mutableListOf<Map<String, Any>>()
         val contentResolver = contentResolver
         val seenUris = mutableSetOf<String>()
+        val collectionCounts = mutableMapOf<String, Int>()
+        
+        android.util.Log.d("PDFScan", "=== Starting comprehensive MediaStore scan (Android ${Build.VERSION.SDK_INT}) ===")
         
         try {
-            // Try multiple MediaStore collections to find PDFs
-            val urisToQuery = mutableListOf<Uri>()
+            // Define all MediaStore collections to query
+            val collectionsToQuery = mutableListOf<Triple<Uri, String, Array<String>>>()
             
-            // Primary: Files collection (covers all files)
-            urisToQuery.add(MediaStore.Files.getContentUri("external"))
-            
-            // Also try specific collections (Android 10+)
+            // 1. MediaStore.Downloads (Android 10+)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    urisToQuery.add(MediaStore.Downloads.getContentUri("external"))
+                    val downloadsUri = MediaStore.Downloads.EXTERNAL_CONTENT_URI
+                    val downloadsProjection = arrayOf(
+                        MediaStore.Downloads._ID,
+                        MediaStore.Downloads.DISPLAY_NAME,
+                        MediaStore.Downloads.SIZE,
+                        MediaStore.Downloads.DATE_MODIFIED,
+                        MediaStore.Downloads.RELATIVE_PATH
+                    )
+                    collectionsToQuery.add(Triple(downloadsUri, "Downloads", downloadsProjection))
                 } catch (e: Exception) {
-                    android.util.Log.w("PDFScan", "Downloads URI not available")
+                    android.util.Log.w("PDFScan", "Downloads collection not available: ${e.message}")
                 }
             }
             
-            // For Android 13+ (S23 Ultra), also try Documents collection
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // 2. MediaStore.Files (covers all files)
+            try {
+                val filesUri = MediaStore.Files.getContentUri("external")
+                val filesProjection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    arrayOf(
+                        MediaStore.Files.FileColumns._ID,
+                        MediaStore.Files.FileColumns.DISPLAY_NAME,
+                        MediaStore.Files.FileColumns.SIZE,
+                        MediaStore.Files.FileColumns.DATE_MODIFIED,
+                        MediaStore.Files.FileColumns.RELATIVE_PATH,
+                        MediaStore.Files.FileColumns.MIME_TYPE
+                    )
+                } else {
+                    arrayOf(
+                        MediaStore.Files.FileColumns._ID,
+                        MediaStore.Files.FileColumns.DISPLAY_NAME,
+                        MediaStore.Files.FileColumns.SIZE,
+                        MediaStore.Files.FileColumns.DATE_MODIFIED,
+                        MediaStore.Files.FileColumns.MIME_TYPE
+                    )
+                }
+                collectionsToQuery.add(Triple(filesUri, "Files", filesProjection))
+            } catch (e: Exception) {
+                android.util.Log.w("PDFScan", "Files collection not available: ${e.message}")
+            }
+            
+            // 3. MediaStore.Documents (if available)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 try {
-                    urisToQuery.add(MediaStore.Files.getContentUri("external"))
-                    // Android 13+ has better support for Documents collection
-                    android.util.Log.d("PDFScan", "Android 13+ detected - using enhanced MediaStore queries")
+                    // Documents collection might not be directly accessible, but try via Files
+                    // For now, we'll rely on Files collection which should include documents
                 } catch (e: Exception) {
-                    android.util.Log.w("PDFScan", "Enhanced MediaStore URI not available")
+                    android.util.Log.w("PDFScan", "Documents collection not directly accessible")
                 }
             }
             
-            // Try to get DATA column if available (available on Android < 10, deprecated on 10+)
-            // For Android 13+ (S23 Ultra), use optimized projection
-            val projection = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                // Android < 10: DATA column is available and reliable
-                arrayOf(
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.SIZE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED,
-                    MediaStore.Files.FileColumns.DATA
-                )
-            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                // Android 13+ (S23 Ultra): Use RELATIVE_PATH for better performance
-                arrayOf(
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.SIZE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED,
-                    MediaStore.Files.FileColumns.RELATIVE_PATH
-                )
-            } else {
-                // Android 10-12: DATA column is deprecated, use content URIs
-                arrayOf(
-                    MediaStore.Files.FileColumns._ID,
-                    MediaStore.Files.FileColumns.DISPLAY_NAME,
-                    MediaStore.Files.FileColumns.SIZE,
-                    MediaStore.Files.FileColumns.DATE_MODIFIED
-                )
-            }
-            
-            // Try multiple selection strategies - some devices might need different queries
-            val selections = mutableListOf<Pair<String, Array<String>>>()
-            
-            // Primary: MIME type query (most reliable) - this should find ALL PDFs
-            selections.add("${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("application/pdf"))
-            // Also try without any path restrictions to find PDFs everywhere
-            selections.add("${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("application/pdf"))
-            
-            // Also try with RELATIVE_PATH for Android 10+ (scoped storage)
-            // For Android 13+ (S23 Ultra), prioritize RELATIVE_PATH queries for better performance
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Query each collection
+            for ((uri, collectionName, projection) in collectionsToQuery) {
                 try {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        // Android 13+ (S23 Ultra): Use optimized RELATIVE_PATH queries first
-                        selections.add(0, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("%Download%", "application/pdf"))
-                        selections.add(1, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.MIME_TYPE} = ?" to arrayOf("%Documents%", "application/pdf"))
-                        selections.add(2, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
-                        selections.add(3, "${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Documents%", "%.pdf"))
-                    } else {
-                        // Android 10-12: Try querying with RELATIVE_PATH to find PDFs in common directories
-                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
-                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Documents%", "%.pdf"))
-                        // Also try without MIME type restriction - just filename
-                        selections.add("${MediaStore.Files.FileColumns.RELATIVE_PATH} LIKE ? AND ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%Download%", "%.pdf"))
+                    android.util.Log.d("PDFScan", "Querying $collectionName collection...")
+                    var collectionCount = 0
+                    
+                    // Use combined filter: MIME type OR file extension
+                    val selection = when {
+                        collectionName == "Downloads" -> {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                "${MediaStore.Downloads.MIME_TYPE} = ? OR ${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
+                            } else {
+                                "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
+                            }
+                        }
+                        else -> {
+                            "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
+                        }
                     }
-                } catch (e: Exception) {
-                    android.util.Log.w("PDFScan", "RELATIVE_PATH query not available")
-                }
-            }
-            
-            // File name pattern matching (works on all versions) - try multiple patterns
-            selections.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%.pdf"))
-            selections.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%.PDF"))
-            selections.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%pdf%"))
-            
-            // Only try DATA column queries on Android < 10 where DATA column exists
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-                selections.add("${MediaStore.Files.FileColumns.DATA} LIKE ?" to arrayOf("%.pdf"))
-                selections.add("${MediaStore.Files.FileColumns.DATA} LIKE ?" to arrayOf("%.PDF"))
-            }
-            
-            // For Android 10+, also try querying without MIME type (just filename)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                selections.add("${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?" to arrayOf("%.pdf"))
-            }
-            
-            val sortOrder = "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
-            
-            // Query each URI with different selection strategies
-            for (uri in urisToQuery) {
-                var foundPDFsForUri = false
-                for ((selection, selectionArgs) in selections) {
-                    if (foundPDFsForUri) {
-                        // Skip remaining selections if we already found PDFs for this URI
-                        break
+                    val selectionArgs = arrayOf("application/pdf", "%.pdf")
+                    val sortOrder = when {
+                        collectionName == "Downloads" -> "${MediaStore.Downloads.DATE_MODIFIED} DESC"
+                        else -> "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
                     }
                     
-                    try {
-                        android.util.Log.d("PDFScan", "Querying MediaStore URI: $uri with selection: $selection")
-                        val cursor: Cursor? = contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
-                        
-                        var count = 0 // Declare count outside cursor?.use block so it's accessible later
-                        cursor?.use {
-                            try {
-                                android.util.Log.d("PDFScan", "MediaStore cursor returned ${it.count} rows")
-                                
-                                // Add null safety checks for column indices
-                                val idColumn = try {
-                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("PDFScan", "ID column not found", e)
-                                    return@use
+                    val cursor: Cursor? = contentResolver.query(uri, projection, selection, selectionArgs, sortOrder)
+                    
+                    cursor?.use {
+                        try {
+                            val totalCount = it.count
+                            android.util.Log.d("PDFScan", "$collectionName: Cursor returned $totalCount total rows")
+                            
+                            // Get column indices based on collection type
+                            val idColumn = if (collectionName == "Downloads") {
+                                it.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                            } else {
+                                it.getColumnIndexOrThrow(MediaStore.Files.FileColumns._ID)
+                            }
+                            
+                            val nameColumn = if (collectionName == "Downloads") {
+                                it.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME)
+                            } else {
+                                it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                            }
+                            
+                            val sizeColumn = if (collectionName == "Downloads") {
+                                it.getColumnIndexOrThrow(MediaStore.Downloads.SIZE)
+                            } else {
+                                it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
+                            }
+                            
+                            val dateColumn = if (collectionName == "Downloads") {
+                                it.getColumnIndexOrThrow(MediaStore.Downloads.DATE_MODIFIED)
+                            } else {
+                                it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
+                            }
+                            
+                            // RELATIVE_PATH column (Android 10+)
+                            var relativePathColumn = -1
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                relativePathColumn = if (collectionName == "Downloads") {
+                                    it.getColumnIndex(MediaStore.Downloads.RELATIVE_PATH)
+                                } else {
+                                    it.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
                                 }
-                                
-                                val nameColumn = try {
-                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DISPLAY_NAME)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("PDFScan", "Name column not found", e)
-                                    return@use
-                                }
-                                
-                                val sizeColumn = try {
-                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.SIZE)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("PDFScan", "Size column not found", e)
-                                    return@use
-                                }
-                                
-                                val dateColumn = try {
-                                    it.getColumnIndexOrThrow(MediaStore.Files.FileColumns.DATE_MODIFIED)
-                                } catch (e: Exception) {
-                                    android.util.Log.e("PDFScan", "Date column not found", e)
-                                    return@use
-                                }
-                                
-                                // Try to get DATA column index (might not exist on Android 10+)
-                                var dataColumn = -1
+                            }
+                            
+                            // Process all results
+                            var duplicatesSkipped = 0
+                            while (it.moveToNext()) {
                                 try {
-                                    dataColumn = it.getColumnIndex(MediaStore.Files.FileColumns.DATA)
-                                } catch (e: Exception) {
-                                    // DATA column not available - this is normal on Android 10+
-                                }
-                                
-                                // For Android 13+ (S23 Ultra), also try to get RELATIVE_PATH column
-                                var relativePathColumn = -1
-                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                                    try {
-                                        relativePathColumn = it.getColumnIndex(MediaStore.Files.FileColumns.RELATIVE_PATH)
-                                    } catch (e: Exception) {
-                                        // RELATIVE_PATH column not available
+                                    val id = it.getLong(idColumn)
+                                    val name = it.getString(nameColumn) ?: "Unknown.pdf"
+                                    val size = it.getLong(sizeColumn)
+                                    val dateModified = it.getLong(dateColumn) * 1000 // Convert to milliseconds
+                                    
+                                    // Double-check it's a PDF (filter by extension if MIME type wasn't set)
+                                    val nameLower = name.lowercase()
+                                    if (!nameLower.endsWith(".pdf")) {
+                                        continue // Skip non-PDF files
                                     }
-                                }
-                                
-                                val maxResults = 10000 // Limit results to prevent memory issues on Samsung devices
-                                
-                                while (it.moveToNext() && count < maxResults) {
-                                try {
-                                    // Add null safety checks for all cursor operations
-                                    val id = try {
-                                        it.getLong(idColumn)
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("PDFScan", "Error getting ID, skipping row", e)
+                                    
+                                    // Create content URI
+                                    val contentUri = ContentUris.withAppendedId(uri, id)
+                                    val filePath = contentUri.toString()
+                                    
+                                    // Deduplicate by URI
+                                    if (seenUris.contains(filePath)) {
+                                        duplicatesSkipped++
                                         continue
                                     }
+                                    seenUris.add(filePath)
                                     
-                                    val name = try {
-                                        it.getString(nameColumn) ?: "Unknown.pdf"
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("PDFScan", "Error getting name, using default", e)
-                                        "Unknown.pdf"
-                                    }
+                                    // Extract folder info
+                                    val folderPath: String
+                                    val folderName: String
                                     
-                                    val size = try {
-                                        it.getLong(sizeColumn)
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("PDFScan", "Error getting size, using 0", e)
-                                        0L
-                                    }
-                                    
-                                    val dateModified = try {
-                                        it.getLong(dateColumn) * 1000 // Convert to milliseconds
-                                    } catch (e: Exception) {
-                                        android.util.Log.w("PDFScan", "Error getting date, using current time", e)
-                                        System.currentTimeMillis()
-                                    }
-                                    
-                                    // Get file path - try DATA column first, fallback to content URI
-                                    var filePath: String? = null
-                                    if (dataColumn >= 0) {
-                                        try {
-                                            val data = it.getString(dataColumn)
-                                            if (!data.isNullOrEmpty()) {
-                                                val file = File(data)
-                                                if (file.exists() && file.canRead()) {
-                                                    filePath = data
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && relativePathColumn >= 0) {
+                                        val relativePath = it.getString(relativePathColumn) ?: ""
+                                        if (relativePath.isNotEmpty()) {
+                                            folderPath = relativePath.trimEnd('/')
+                                            folderName = when {
+                                                relativePath.contains("Download", ignoreCase = true) -> "Downloads"
+                                                relativePath.contains("Document", ignoreCase = true) -> "Documents"
+                                                else -> {
+                                                    val parts = relativePath.split("/")
+                                                    parts.lastOrNull()?.takeIf { it.isNotEmpty() } ?: "Unknown"
                                                 }
                                             }
-                                        } catch (e: Exception) {
-                                            // DATA column not accessible
-                                        }
-                                    }
-                                    
-                                    // If no file path from DATA, use content URI
-                                    if (filePath.isNullOrEmpty()) {
-                                        val contentUri = ContentUris.withAppendedId(uri, id)
-                                        filePath = contentUri.toString()
-                                    }
-                                    
-                                    // Skip duplicates
-                                    if (filePath != null && !seenUris.contains(filePath)) {
-                                        seenUris.add(filePath)
-                                        val isContentUri = filePath.startsWith("content://")
-                                        
-                                        // For file paths, verify existence; for content URIs, accept them
-                                        if (isContentUri) {
-                                            // Extract folder info - use RELATIVE_PATH on Android 13+ (S23 Ultra) for better accuracy
-                                            val folderPath: String
-                                            val folderName: String
-                                            
-                                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && relativePathColumn >= 0) {
-                                                // Android 13+ (S23 Ultra): Use RELATIVE_PATH column for accurate folder info
-                                                val relativePathResult = try {
-                                                    val relativePath = it.getString(relativePathColumn) ?: ""
-                                                    if (relativePath.isNotEmpty()) {
-                                                        Pair(relativePath.trimEnd('/'), when {
-                                                            relativePath.contains("Download", ignoreCase = true) -> "Downloads"
-                                                            relativePath.contains("Document", ignoreCase = true) -> "Documents"
-                                                            else -> {
-                                                                val parts = relativePath.split("/")
-                                                                parts.lastOrNull()?.takeIf { it.isNotEmpty() } ?: "Unknown"
-                                                            }
-                                                        })
-                                                    } else {
-                                                        Pair("Unknown", "Unknown")
-                                                    }
-                                                } catch (e: Exception) {
-                                                    android.util.Log.w("PDFScan", "Error reading RELATIVE_PATH, falling back", e)
-                                                    Pair("Unknown", "Unknown")
-                                                }
-                                                folderPath = relativePathResult.first
-                                                folderName = relativePathResult.second
-                                            } else {
-                                                // Fallback: Extract folder info from content URI
-                                                folderPath = try {
-                                                    val uriParts = filePath.split("/")
-                                                    if (uriParts.size > 1) {
-                                                        uriParts.dropLast(1).joinToString("/")
-                                                    } else {
-                                                        "Unknown"
-                                                    }
-                                                } catch (e: Exception) {
-                                                    "Unknown"
-                                                }
-                                                folderName = try {
-                                                    val uriParts = filePath.split("/")
-                                                    if (uriParts.size > 1) {
-                                                        val folderPart = uriParts[uriParts.size - 2]
-                                                        when {
-                                                            folderPart.contains("Download", ignoreCase = true) -> "Downloads"
-                                                            folderPart.contains("Document", ignoreCase = true) -> "Documents"
-                                                            else -> folderPart
-                                                        }
-                                                    } else {
-                                                        "Unknown"
-                                                    }
-                                                } catch (e: Exception) {
-                                                    "Unknown"
-                                                }
-                                            }
-                                            
-                                            // Content URIs are always valid - add them
-                                            pdfList.add(mapOf(
-                                                "path" to filePath,
-                                                "name" to name,
-                                                "size" to size,
-                                                "dateModified" to dateModified,
-                                                "isContentUri" to true,
-                                                "folderPath" to folderPath,
-                                                "folderName" to folderName
-                                            ))
-                                            count++
-                                            android.util.Log.d("PDFScan", "Found PDF (content URI): $name")
                                         } else {
-                                            // For file paths, verify they exist
-                                            val file = File(filePath)
-                                            if (file.exists() && file.canRead()) {
-                                                val folderPath = file.parent
-                                                val folderName = file.parentFile?.name ?: "Unknown"
-                                                
-                                                pdfList.add(mapOf(
-                                                    "path" to filePath,
-                                                    "name" to name,
-                                                    "size" to size,
-                                                    "dateModified" to dateModified,
-                                                    "isContentUri" to false,
-                                                    "folderPath" to folderPath,
-                                                    "folderName" to folderName
-                                                ))
-                                                count++
-                                                android.util.Log.d("PDFScan", "Found PDF (file path): $name")
-                                            }
+                                            folderPath = collectionName
+                                            folderName = collectionName
                                         }
+                                    } else {
+                                        folderPath = collectionName
+                                        folderName = collectionName
+                                    }
+                                    
+                                    // Add PDF
+                                    pdfList.add(mapOf(
+                                        "path" to filePath,
+                                        "name" to name,
+                                        "size" to size,
+                                        "dateModified" to dateModified,
+                                        "isContentUri" to true,
+                                        "folderPath" to folderPath,
+                                        "folderName" to folderName
+                                    ))
+                                    collectionCount++
+                                    
+                                    // Log progress every 100 PDFs
+                                    if (collectionCount % 100 == 0) {
+                                        android.util.Log.d("PDFScan", "$collectionName: Processed $collectionCount PDFs...")
                                     }
                                 } catch (e: Exception) {
-                                    android.util.Log.e("PDFScan", "Error processing MediaStore row", e)
-                                    e.printStackTrace()
-                                    // Continue with next file
+                                    android.util.Log.e("PDFScan", "Error processing $collectionName row", e)
                                 }
                             }
-                            android.util.Log.d("PDFScan", "Added $count PDFs from URI: $uri with selection: $selection")
-                            } catch (e: Exception) {
-                                android.util.Log.e("PDFScan", "Error using cursor", e)
-                                e.printStackTrace()
-                            }
-                            if (count > 0) {
-                                // If we found PDFs with this selection, don't try other selections for this URI
-                                foundPDFsForUri = true
-                            }
-                        } ?: android.util.Log.w("PDFScan", "Cursor is null for URI: $uri with selection: $selection")
-                    } catch (e: Exception) {
-                        android.util.Log.e("PDFScan", "Error querying URI: $uri with selection: $selection", e)
-                        e.printStackTrace()
-                    }
+                            
+                            collectionCounts[collectionName] = collectionCount
+                            android.util.Log.d("PDFScan", "$collectionName: Found $collectionCount PDFs (duplicates skipped: $duplicatesSkipped)")
+                            
+                        } catch (e: Exception) {
+                            android.util.Log.e("PDFScan", "Error processing $collectionName cursor", e)
+                            e.printStackTrace()
+                        }
+                    } ?: android.util.Log.w("PDFScan", "$collectionName: Cursor is null")
+                    
+                } catch (e: Exception) {
+                    android.util.Log.e("PDFScan", "Error querying $collectionName collection", e)
+                    e.printStackTrace()
                 }
             }
+            
+            // Sort by date modified (newest first)
+            pdfList.sortByDescending { it["dateModified"] as Long }
+            
+            // Log summary
+            android.util.Log.d("PDFScan", "=== MediaStore Scan Summary ===")
+            for ((collectionName, count) in collectionCounts) {
+                android.util.Log.d("PDFScan", "$collectionName: $count PDFs")
+            }
+            android.util.Log.d("PDFScan", "Merged total: ${pdfList.size} PDFs")
+            android.util.Log.d("PDFScan", "Deduplication: ${collectionCounts.values.sum() - pdfList.size} duplicates removed")
+            
         } catch (e: Exception) {
             android.util.Log.e("PDFScan", "MediaStore scan error", e)
             e.printStackTrace()
         }
         
-        android.util.Log.d("PDFScan", "MediaStore scan total: ${pdfList.size} PDFs")
+        android.util.Log.d("PDFScan", "=== MediaStore scan complete: ${pdfList.size} PDFs ===")
         return pdfList
     }
     

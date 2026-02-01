@@ -410,11 +410,8 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           Future.delayed(const Duration(milliseconds: 500), () {
             if (!mounted) return;
             // Start background scan (non-blocking, with timeouts)
+            // No permission check needed - MediaStore works without permissions
             _loadPDFs(forceRescan: false);
-            // Also check and request storage access if needed
-            _checkAndRequestAccess().catchError((e) {
-              print('Error checking storage access: $e');
-            });
           });
         }
       } catch (e, stackTrace) {
@@ -516,128 +513,12 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     }
   }
   
+  /// No permission check needed - MediaStore works without permissions
+  /// This method is kept for compatibility but does nothing
   Future<void> _checkAndRequestAccess() async {
-    // Automatic device scan + permission dialog is disabled via feature flag.
-    // This prevents any surprise dialogs or scans on startup which might
-    // contribute to hangs/crashes on some devices. User can still trigger
-    // scanning manually via the \"Retry Scan\" button.
-    if (!_enableAutomaticDeviceScan) {
-      return;
-    }
-
-    if (!kIsWeb && io.Platform.isAndroid) {
-      // Check if dialog has already been shown
-      final dialogShown = await PDFPreferencesService.hasPermissionDialogBeenShown();
-      
-      // Only show dialog if:
-      // 1. It hasn't been shown before
-      // 2. User doesn't have storage access
-      // 3. No PDFs were found (first launch or no access)
-      if (!dialogShown) {
-        final hasAccess = await PDFService.hasStorageAccess();
-        final hasManageStorage = await Permission.manageExternalStorage.isGranted;
-        
-        // Check if user has any form of access
-        if (!hasAccess && !hasManageStorage && pdfFiles.isEmpty) {
-          // Show dialog to request access on first launch
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showStorageAccessDialog();
-          });
-        } else {
-          // User already has access, mark dialog as shown
-          await PDFPreferencesService.setPermissionDialogShown(true);
-        }
-      }
-    }
-  }
-  
-  Future<void> _showStorageAccessDialog() async {
-    if (!mounted) return;
-    
-    // Mark that dialog has been shown
-    await PDFPreferencesService.setPermissionDialogShown(true);
-    
-    final shouldRequest = await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: const Text('Enable Automatic PDF Loading'),
-        content: const Text(
-          'To automatically load ALL PDFs from your device, please grant storage access.\n\n'
-          '📱 For ROOT-LEVEL ACCESS (all folders):\n'
-          '1. Tap "Grant Root Access" below\n'
-          '2. You\'ll be taken to Settings\n'
-          '3. Find this app and enable "Allow access to manage all files"\n'
-          '4. Return to the app\n\n'
-          '📁 Alternative (folder access):\n'
-          '• Tap "Select Folder" to choose a specific folder\n'
-          '• Select "Downloads" or "Documents"\n'
-          '• App will scan that folder and subfolders',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, 'skip'),
-            child: const Text('Skip'),
-          ),
-          OutlinedButton(
-            onPressed: () => Navigator.pop(context, 'folder'),
-            style: OutlinedButton.styleFrom(
-              side: const BorderSide(color: Color(0xFFE53935)),
-            ),
-            child: const Text('Select Folder', style: TextStyle(color: Color(0xFFE53935))),
-          ),
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context, 'root'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE53935),
-            ),
-            child: const Text('Grant Root Access', style: TextStyle(color: Colors.white)),
-          ),
-        ],
-      ),
-    );
-    
-    if (shouldRequest != null && shouldRequest != 'skip' && mounted) {
-      if (shouldRequest == 'root') {
-        // Request root-level access via MANAGE_EXTERNAL_STORAGE
-        final granted = await PDFScannerService.requestStoragePermission();
-        if (granted && mounted) {
-          _loadPDFs(forceRescan: true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Root access granted! Scanning all folders for PDFs...'),
-              duration: Duration(seconds: 3),
-            ),
-          );
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Please enable "Allow access to manage all files" in Settings, then return to the app.'),
-              duration: Duration(seconds: 5),
-            ),
-          );
-        }
-      } else if (shouldRequest == 'folder') {
-        // Request folder access via SAF
-        final granted = await PDFService.requestStorageAccess();
-        if (granted && mounted) {
-          _loadPDFs(forceRescan: true);
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Folder access granted! Scanning for PDFs...'),
-              duration: Duration(seconds: 3),
-            ),
-          );
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('If you see "Can\'t use this folder", try selecting "Downloads" or "Documents" folder instead.'),
-              duration: Duration(seconds: 5),
-            ),
-          );
-        }
-      }
-    }
+    // No permissions needed - MediaStore works without any storage permissions
+    // PDFs are loaded automatically via MediaStore API (permission-less)
+    return;
   }
 
   Future<void> _loadToolsHistory() async {
@@ -793,29 +674,69 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
   
   /// Scan PDFs in background without blocking UI thread
   /// This is critical for preventing ANR on Samsung devices
+  /// CRITICAL: Updates UI reactively as PDFs are discovered
   void _scanInBackground() {
     // Use Future.microtask to ensure this runs after current frame
     Future.microtask(() async {
+      bool scanCompleted = false;
+      
       try {
         // Scan in background - this should never block
-        final scannedPDFs = await PDFScannerService.scanAllPDFsInBackground()
+        // The scan saves to cache incrementally, so we refresh from cache periodically
+        final scanFuture = PDFScannerService.scanAllPDFsInBackground();
+        
+        // While scanning, periodically refresh UI from cache (reactive updates)
+        Timer? refreshTimer;
+        refreshTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+          if (!mounted || scanCompleted) {
+            timer.cancel();
+            return;
+          }
+          
+          // Load from cache and update UI (reactive update)
+          try {
+            final cachedPDFs = await PDFCacheService.loadPDFList();
+            if (mounted && cachedPDFs.length != pdfFiles.length) {
+              setState(() {
+                pdfFiles = cachedPDFs;
+                // Keep loading indicator while scan is in progress
+                _isLoading = !scanCompleted;
+              });
+            }
+          } catch (e) {
+            print('Error refreshing from cache: $e');
+          }
+        });
+        
+        // Wait for scan to complete
+        final scannedPDFs = await scanFuture
             .timeout(
-              const Duration(seconds: 120), // Max 2 minutes
+              const Duration(minutes: 5), // Increased timeout for 400+ PDFs
               onTimeout: () {
-                print('PDF scan timeout - returning empty list');
+                print('PDF scan timeout - returning cached PDFs');
+                scanCompleted = true;
                 return <PDFFile>[];
               },
             )
             .catchError((e, stackTrace) {
               print('Error in background scan: $e');
               print('Stack trace: $stackTrace');
+              scanCompleted = true;
               return <PDFFile>[];
             });
+        
+        scanCompleted = true;
+        
+        // Cancel refresh timer
+        refreshTimer?.cancel();
+        
+        // Final update from cache (ensures we have all PDFs)
+        final finalPDFs = await PDFCacheService.loadPDFList();
         
         // Update UI only if widget is still mounted
         if (mounted) {
           setState(() {
-            pdfFiles = scannedPDFs;
+            pdfFiles = finalPDFs;
             _isLoading = false;
           });
           
@@ -825,6 +746,7 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           });
         }
       } catch (e, stackTrace) {
+        scanCompleted = true;
         print('Unexpected error in _scanInBackground: $e');
         print('Stack trace: $stackTrace');
         if (mounted) {

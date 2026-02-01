@@ -50,26 +50,9 @@ class PDFService {
       // First, scan all PDFs from device using platform channel (Android)
       if (Platform.isAndroid) {
         try {
-          // For Android 13+, READ_EXTERNAL_STORAGE is not effective
-          // We rely on MediaStore API which doesn't require special permissions
-          // For older Android versions, request storage permission
-          final deviceInfo = DeviceInfoPlugin();
-          final androidInfo = await deviceInfo.androidInfo;
-          final sdkInt = androidInfo.version.sdkInt;
-          
-          if (sdkInt < 33) { // Android 12 and below
-            if (await Permission.storage.isDenied) {
-              print('PDFService: Requesting storage permission for Android < 13...');
-              final status = await Permission.storage.request();
-              if (status.isDenied) {
-                print('PDFService: Storage permission denied, scanning may be limited');
-              }
-            }
-          } else {
-            print('PDFService: Android 13+ detected - using MediaStore API (no special permissions needed)');
-          }
-          
-          print('PDFService: Starting device scan...');
+          // MediaStore API works on ALL Android versions without any permissions
+          // No permission requests needed - this is permission-less access
+          print('PDFService: Starting device scan (permission-less MediaStore)...');
           final dynamic result = await _pdfScanChannel.invokeMethod('scanPDFs');
           print('PDFService: Scan result type: ${result.runtimeType}');
           

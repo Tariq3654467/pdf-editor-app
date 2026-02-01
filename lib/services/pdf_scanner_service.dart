@@ -75,14 +75,47 @@ class PDFScannerService {
             return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
           }
           
-          // If result is empty list and no root access, also scan app directory
+          // CRITICAL: If MediaStore returns empty, don't clear cache - keep existing cache
+          // Only scan app directory for app-managed PDFs, but preserve MediaStore cache
           if (result.isEmpty) {
-            final hasRootAccess = await Permission.manageExternalStorage.isGranted;
-            final hasSAFAccess = await PDFService.hasStorageAccess();
-            if (!hasRootAccess && !hasSAFAccess) {
-              print('PDFScannerService: No root/SAF access and empty scan result, scanning app directory');
-              return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
+            print('PDFScannerService: MediaStore scan returned empty - preserving existing cache');
+            print('PDFScannerService: Scanning app directory for app-managed PDFs only');
+            final appPDFs = await _scanAppDirectory(bookmarks, recentAccess, saveToCache: false);
+            
+            // Merge with existing cache instead of replacing
+            final cachedPDFs = await PDFCacheService.loadPDFList();
+            final mergedPDFs = <PDFFile>[];
+            final seenPaths = <String>{};
+            
+            // Add cached PDFs first
+            for (var pdf in cachedPDFs) {
+              if (pdf.filePath != null && !seenPaths.contains(pdf.filePath!)) {
+                seenPaths.add(pdf.filePath!);
+                mergedPDFs.add(pdf);
+              }
             }
+            
+            // Add app PDFs (new ones only)
+            for (var pdf in appPDFs) {
+              if (pdf.filePath != null && !seenPaths.contains(pdf.filePath!)) {
+                seenPaths.add(pdf.filePath!);
+                mergedPDFs.add(pdf);
+              }
+            }
+            
+            // Sort by date
+            mergedPDFs.sort((a, b) {
+              final aDate = a.dateModified ?? DateTime(1970);
+              final bDate = b.dateModified ?? DateTime(1970);
+              return bDate.compareTo(aDate);
+            });
+            
+            // Only update cache if we have PDFs to save
+            if (saveToCache && mergedPDFs.isNotEmpty) {
+              await PDFCacheService.savePDFList(mergedPDFs);
+            }
+            
+            return mergedPDFs;
           }
           
           final List<PDFFile> pdfFiles = [];
@@ -230,11 +263,15 @@ class PDFScannerService {
             return bDate.compareTo(aDate);
           });
           
-          print('PDFScannerService: Scanned ${pdfFiles.length} PDFs');
+          print('PDFScannerService: Scanned ${pdfFiles.length} PDFs from MediaStore');
           
-          // Save to cache
-          if (saveToCache) {
+          // CRITICAL: Only save to cache if we have PDFs
+          // Never overwrite cache with empty list (preserves existing cache)
+          if (saveToCache && pdfFiles.isNotEmpty) {
             await PDFCacheService.savePDFList(pdfFiles);
+            print('PDFScannerService: Saved ${pdfFiles.length} PDFs to cache');
+          } else if (pdfFiles.isEmpty) {
+            print('PDFScannerService: MediaStore returned empty - preserving existing cache');
           }
           
           return pdfFiles;
@@ -393,61 +430,12 @@ class PDFScannerService {
   }
   
   /// Request storage permission (Android)
+  /// NOTE: This app does NOT request storage permissions - uses MediaStore only
+  /// This method is kept for compatibility but always returns true
   static Future<bool> requestStoragePermission() async {
-    if (kIsWeb || !io.Platform.isAndroid) return true;
-    
-    try {
-      final deviceInfo = await DeviceInfoPlugin().androidInfo;
-      final sdkInt = deviceInfo.version.sdkInt;
-      
-      // Android 11+ (API 30+) - Try MANAGE_EXTERNAL_STORAGE for root-level access
-      if (sdkInt >= 30) {
-        // First try MANAGE_EXTERNAL_STORAGE for full root access
-        if (await Permission.manageExternalStorage.isGranted) {
-          print('PDFScannerService: MANAGE_EXTERNAL_STORAGE already granted');
-          return true;
-        }
-        
-        // Request MANAGE_EXTERNAL_STORAGE (requires user to go to Settings)
-        final manageStorageStatus = await Permission.manageExternalStorage.status;
-        if (manageStorageStatus.isDenied || manageStorageStatus.isPermanentlyDenied) {
-          print('PDFScannerService: Requesting MANAGE_EXTERNAL_STORAGE...');
-          final result = await Permission.manageExternalStorage.request();
-          if (result.isGranted) {
-            print('PDFScannerService: MANAGE_EXTERNAL_STORAGE granted - full root access enabled');
-            return true;
-          } else if (result.isPermanentlyDenied) {
-            // Open Settings for user to manually enable
-            print('PDFScannerService: Opening Settings for MANAGE_EXTERNAL_STORAGE...');
-            await openAppSettings();
-            return false; // Will be granted after user enables in Settings
-          } else {
-            print('PDFScannerService: MANAGE_EXTERNAL_STORAGE denied, falling back to SAF');
-          }
-        }
-        
-        // Fallback to SAF access for Android 13+
-        if (sdkInt >= 33) {
-          final hasSAF = await PDFService.hasStorageAccess();
-          if (!hasSAF) {
-            return await PDFService.requestStorageAccess();
-          }
-          return true;
-        }
-      } else {
-        // Android 12 and below
-        if (await Permission.storage.isGranted) {
-          return true;
-        }
-        final result = await Permission.storage.request();
-        return result.isGranted;
-      }
-    } catch (e) {
-      print('PDFScannerService: Error requesting permission: $e');
-      return false;
-    }
-    
-    return false;
+    // No permissions needed - MediaStore works without permissions
+    print('PDFScannerService: No permission request needed - using MediaStore (permission-less)');
+    return true;
   }
   
   /// Process scan results in background isolate (for heavy processing)
@@ -613,9 +601,9 @@ class PDFScannerService {
   }
   
   /// Scan PDFs in background (non-blocking)
-  /// PHASE 4: Improved with better timeout and error handling for 400+ PDFs
+  /// CRITICAL: Saves to cache incrementally for reactive UI updates
   /// Returns a Future that completes when scan is done (for UI updates)
-  /// CRITICAL: Comprehensive error handling to prevent crashes on Samsung devices
+  /// Comprehensive error handling to prevent crashes on Samsung devices
   static Future<List<PDFFile>> scanAllPDFsInBackground() async {
     if (_isScanning) {
       print('PDFScannerService: Scan already in progress, skipping...');
@@ -624,23 +612,33 @@ class PDFScannerService {
     
     _isScanning = true;
     try {
-      // PHASE 4: Add delay to ensure UI thread is free before starting heavy operation
+      // Add delay to ensure UI thread is free before starting heavy operation
       await Future.delayed(const Duration(milliseconds: 200));
       
-      // PHASE 4: Increased timeout for large storage (400+ PDFs) - 5 minutes
+      // Scan all PDFs and save to cache (cache is updated incrementally)
+      // The cache update happens in scanAllPDFs -> PDFCacheService.savePDFList
+      // UI can refresh from cache periodically to get reactive updates
       final result = await scanAllPDFs(saveToCache: true)
           .timeout(
-            const Duration(minutes: 5), // Increased from 2 minutes for large storage
+            const Duration(minutes: 5), // Increased timeout for 400+ PDFs
             onTimeout: () {
               print('PDFScannerService: Background scan timeout after 5 minutes');
               print('PDFScannerService: This may indicate very large storage (>400 PDFs)');
-              return <PDFFile>[];
+              // Return cached PDFs even on timeout
+              return PDFCacheService.loadPDFList().catchError((e) {
+                print('Error loading cache on timeout: $e');
+                return <PDFFile>[];
+              });
             },
           )
           .catchError((e, stackTrace) {
             print('PDFScannerService: Background scan error: $e');
             print('Stack trace: $stackTrace');
-            return <PDFFile>[]; // Return empty list instead of crashing
+            // Return cached PDFs on error
+            return PDFCacheService.loadPDFList().catchError((e) {
+              print('Error loading cache on error: $e');
+              return <PDFFile>[];
+            });
           });
       
       print('PDFScannerService: Background scan completed with ${result.length} PDFs');
@@ -648,7 +646,11 @@ class PDFScannerService {
     } catch (e, stackTrace) {
       print('PDFScannerService: Unexpected error in scanAllPDFsInBackground: $e');
       print('Stack trace: $stackTrace');
-      return <PDFFile>[]; // Always return empty list, never crash
+      // Return cached PDFs on unexpected error
+      return PDFCacheService.loadPDFList().catchError((e) {
+        print('Error loading cache on unexpected error: $e');
+        return <PDFFile>[];
+      });
     } finally {
       _isScanning = false;
     }

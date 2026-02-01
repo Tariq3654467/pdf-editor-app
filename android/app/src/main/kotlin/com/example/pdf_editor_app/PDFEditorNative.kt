@@ -151,5 +151,24 @@ class PDFEditorNative {
         colorB: Int,
         strokeWidth: Float
     ): Boolean
+    
+    /**
+     * Get text quads (bounding boxes) for text selection range
+     * @param pdfPath Path to PDF file
+     * @param pageIndex Page number (0-based)
+     * @param startX Start X coordinate in PDF space
+     * @param startY Start Y coordinate in PDF space
+     * @param endX End X coordinate in PDF space
+     * @param endY End Y coordinate in PDF space
+     * @return JSON string containing array of quads
+     */
+    external fun getTextQuadsForSelection(
+        pdfPath: String,
+        pageIndex: Int,
+        startX: Float,
+        startY: Float,
+        endX: Float,
+        endY: Float
+    ): String
 }
 

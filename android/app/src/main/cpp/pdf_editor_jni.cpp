@@ -2,6 +2,7 @@
 #include <string>
 #include <android/log.h>
 #include "pdf_annotation_editor.h"
+#include "pdf_text_quad_extractor.h"
 
 #define LOG_TAG "PDFEditorNative"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
@@ -22,6 +23,8 @@ jboolean addHighlightAnnotation(JNIEnv *env, jstring pdfPath, jint pageIndex,
 jboolean addUnderlineAnnotation(JNIEnv *env, jstring pdfPath, jint pageIndex,
                                 jfloat x1, jfloat y1, jfloat x2, jfloat y2,
                                 jint colorR, jint colorG, jint colorB, jfloat strokeWidth);
+jstring getTextQuadsForSelection(JNIEnv *env, jstring pdfPath, jint pageIndex,
+                                 jfloat startX, jfloat startY, jfloat endX, jfloat endY);
 
 /**
  * Load PDF document
@@ -129,6 +132,17 @@ Java_com_example_pdf_1editor_1app_PDFEditorNative_addUnderlineAnnotation(JNIEnv 
                                                                          jint colorR, jint colorG, jint colorB, jfloat strokeWidth) {
     return addUnderlineAnnotation(env, pdfPath, pageIndex, x1, y1, x2, y2,
                                    colorR, colorG, colorB, strokeWidth);
+}
+
+/**
+ * Get text quads for selection range
+ */
+JNIEXPORT jstring JNICALL
+Java_com_example_pdf_1editor_1app_PDFEditorNative_getTextQuadsForSelection(JNIEnv *env, jobject thiz,
+                                                                             jstring pdfPath, jint pageIndex,
+                                                                             jfloat startX, jfloat startY,
+                                                                             jfloat endX, jfloat endY) {
+    return getTextQuadsForSelection(env, pdfPath, pageIndex, startX, startY, endX, endY);
 }
 
 } // extern "C"

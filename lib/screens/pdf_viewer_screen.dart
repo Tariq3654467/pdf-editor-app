@@ -26,6 +26,9 @@ import '../services/pdf_text_selection_service.dart';
 import '../services/mupdf_editor_service.dart';
 import '../services/pdf_save_service.dart';
 import '../widgets/in_app_file_picker.dart';
+import '../widgets/text_aware_annotation_overlay.dart';
+import '../models/pdf_annotation.dart';
+import '../services/annotation_storage_service.dart';
 
 class PDFViewerScreen extends StatefulWidget {
   final String filePath;
@@ -58,6 +61,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   int _pdfReloadKey = 0; // Key to force PDF viewer reload after modifications
   bool _isSavingAnnotation = false; // Prevent multiple simultaneous saves
   DateTime? _lastReloadTime; // Track last reload time to prevent excessive reloads
+  
+  // Text-aware annotation system
+  Size? _pdfPageSize; // PDF page size in points
+  double _zoomLevel = 1.0;
+  List<PDFAnnotation> _savedAnnotations = [];
+  final AnnotationStorageService _annotationStorage = AnnotationStorageService();
   
   // Error handling
   String? _errorMessage;
@@ -500,7 +509,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         _totalPages = details.document.pages.count;
         _isLoading = false;
         _errorMessage = null; // Clear any previous errors
+        
+        // Get page size for annotation coordinate system
+        if (details.document.pages.count > 0) {
+          final firstPage = details.document.pages[0];
+          _pdfPageSize = Size(firstPage.size.width, firstPage.size.height);
+        }
       });
+      
+      // Load saved annotations
+      _loadSavedAnnotations();
       
       // Check if document is scanned (image-based, no extractable text)
       _checkIfScannedDocument();
@@ -517,6 +535,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           _scrollToCurrentPage();
         }
       });
+    }
+  }
+  
+  /// Load saved annotations for current PDF
+  Future<void> _loadSavedAnnotations() async {
+    try {
+      final annotations = await _annotationStorage.loadAnnotations(_actualFilePath ?? widget.filePath);
+      if (mounted) {
+        setState(() {
+          _savedAnnotations = annotations;
+        });
+      }
+    } catch (e) {
+      print('Error loading annotations: $e');
     }
   }
   
@@ -995,34 +1027,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         bottom: false,
         child: Stack(
           children: [
-            // PDF Viewer with annotation overlay
-            PDFAnnotationOverlay(
-            key: _annotationOverlayKey,
-            drawingColor: _getToolColor(),
-            strokeWidth: _getStrokeWidth(),
-            isDrawing: _isDrawingToolActive,
-            isEraser: _selectedTool == 'eraser',
-            toolType: _selectedTool,
-            currentPage: _currentPage,
-            scrollOffset: _pdfScrollOffset,
+            // PDF Viewer with text-aware annotation overlay
+            TextAwareAnnotationOverlay(
             pdfPath: _actualFilePath ?? widget.filePath,
-            textAnnotations: _textAnnotations,
-            onTextTap: (textAnnotation) {
-              // Allow editing text by tapping on it
-              if (_isTextEditMode && _selectedTool == 'text') {
-                _editTextAnnotation(textAnnotation);
-              }
-            },
-            onAnnotationComplete: _saveAnnotationToPDF, // Save directly to PDF content
-            onClear: () {},
-            onUndoStateChanged: (canUndo) {
+            currentPage: _currentPage - 1, // Convert to 0-based
+            pageSize: _pdfPageSize ?? Size(612, 792), // Default US Letter if not loaded
+            zoomLevel: _zoomLevel,
+            scrollOffset: Offset(0, _pdfScrollOffset),
+            screenSize: MediaQuery.of(context).size,
+            selectedTool: _isEditingMode ? _selectedTool : null,
+            toolColor: _selectedColor,
+            strokeWidth: _strokeWidth,
+            onAnnotationsChanged: (annotations) {
               setState(() {
-                _canUndo = canUndo;
-              });
-            },
-            onRedoStateChanged: (canRedo) {
-              setState(() {
-                _canRedo = canRedo;
+                _savedAnnotations = annotations;
               });
             },
             child: NotificationListener<ScrollNotification>(

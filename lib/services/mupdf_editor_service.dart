@@ -256,5 +256,34 @@ class MuPDFEditorService {
       return false;
     }
   }
+  
+  /// Get text quads (bounding boxes) for text selection range
+  /// 
+  /// @param pdfPath Path to PDF file
+  /// @param pageIndex Page number (0-based)
+  /// @param start Start point of selection in PDF space
+  /// @param end End point of selection in PDF space
+  /// @return JSON string containing array of quads
+  static Future<String?> getTextQuadsForSelection(
+    String pdfPath,
+    int pageIndex,
+    Offset start,
+    Offset end,
+  ) async {
+    try {
+      final result = await _channel.invokeMethod<String>('getTextQuadsForSelection', {
+        'path': pdfPath,
+        'pageIndex': pageIndex,
+        'startX': start.dx,
+        'startY': start.dy,
+        'endX': end.dx,
+        'endY': end.dy,
+      });
+      return result;
+    } catch (e) {
+      print('Error getting text quads: $e');
+      return null;
+    }
+  }
 }
 

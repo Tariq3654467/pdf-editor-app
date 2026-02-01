@@ -155,6 +155,29 @@ class PDFEditorService(private val methodChannel: MethodChannel) {
                 }
             }
             
+            "getTextQuadsForSelection" -> {
+                val pdfPath = call.argument<String>("path")
+                val pageIndex = call.argument<Int>("pageIndex") ?: 0
+                val startX = call.argument<Double>("startX")?.toFloat() ?: 0f
+                val startY = call.argument<Double>("startY")?.toFloat() ?: 0f
+                val endX = call.argument<Double>("endX")?.toFloat() ?: 0f
+                val endY = call.argument<Double>("endY")?.toFloat() ?: 0f
+                
+                if (pdfPath != null) {
+                    try {
+                        val jsonString = pdfEditor.getTextQuadsForSelection(
+                            pdfPath, pageIndex, startX, startY, endX, endY
+                        )
+                        result.success(jsonString)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error getting text quads: ${e.message}", e)
+                        result.error("ERROR", e.message, null)
+                    }
+                } else {
+                    result.error("INVALID_ARGUMENT", "PDF path is null", null)
+                }
+            }
+            
             else -> {
                 result.notImplemented()
             }

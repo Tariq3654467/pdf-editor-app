@@ -28,8 +28,7 @@ class AnnotationPoint {
   final bool isEraser;
   final String toolType; // 'pen', 'highlight', 'underline'
   final int pageNumber; // Page number this annotation belongs to
-  final Offset normalizedPoint; // Normalized coordinates (0-1 range) relative to page
-  final double? documentY; // Absolute Y position in document (screen Y + scroll offset when drawn)
+  final Offset normalizedPoint; // Normalized coordinates (0-1 range) relative to overlay
 
   AnnotationPoint({
     required this.point,
@@ -39,7 +38,6 @@ class AnnotationPoint {
     this.toolType = 'pen',
     required this.pageNumber,
     required this.normalizedPoint,
-    this.documentY, // Store absolute document position (nullable for backward compatibility)
   });
 }
 
@@ -84,7 +82,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   List<AnnotationPoint> _currentPath = [];
   List<List<AnnotationPoint>> _redoStack = []; // For redo functionality
 
-
   void _onPanStart(DragStartDetails details) {
     if (widget.isDrawing) {
       // Get the size of the overlay to normalize coordinates
@@ -92,7 +89,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
       final size = renderBox?.size ?? Size.zero;
       
       // Normalize coordinates (0-1 range) relative to overlay size
-      // This ensures annotations stay in the same position relative to the page
+      // These coordinates stay consistent regardless of scroll
       final normalizedPoint = size.width > 0 && size.height > 0
           ? Offset(
               details.localPosition.dx / size.width,
@@ -101,9 +98,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           : Offset.zero;
       
       setState(() {
-        // Store absolute document position for scroll compensation
-        // documentY = screen position + scroll offset (absolute position in document)
-        final documentY = details.localPosition.dy + widget.scrollOffset;
         _currentPath = [
           AnnotationPoint(
             point: details.localPosition,
@@ -113,7 +107,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             toolType: widget.toolType,
             pageNumber: widget.currentPage,
             normalizedPoint: normalizedPoint,
-            documentY: documentY,
           ),
         ];
       });
@@ -135,14 +128,10 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           : Offset.zero;
       
       setState(() {
-        // Store absolute document position (screen Y + scroll offset)
-        final documentY = details.localPosition.dy + widget.scrollOffset;
-        
         // For underline, only update X position to keep horizontal line
         if (widget.toolType == 'underline') {
           final startY = _currentPath.first.point.dy;
           final startNormalizedY = _currentPath.first.normalizedPoint.dy;
-          final startDocumentY = _currentPath.first.documentY;
           _currentPath.add(
             AnnotationPoint(
               point: Offset(details.localPosition.dx, startY),
@@ -151,7 +140,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
               toolType: widget.toolType,
               pageNumber: widget.currentPage,
               normalizedPoint: Offset(normalizedPoint.dx, startNormalizedY),
-              documentY: startDocumentY, // Keep same document Y for underline
             ),
           );
         } else {
@@ -164,7 +152,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
               toolType: widget.toolType,
               pageNumber: widget.currentPage,
               normalizedPoint: normalizedPoint,
-              documentY: documentY, // Store absolute position in document
             ),
           );
         }
@@ -262,7 +249,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     final shouldShowOverlay = widget.isDrawing || hasAnnotations || hasTextAnnotations;
 
     // If not drawing and no annotations, return child directly without overlay
-    // This ensures zero interference with scrolling on devices like S23 Ultra
     if (!shouldShowOverlay) {
       return widget.child;
     }
@@ -286,8 +272,6 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     );
 
     // When drawing, wrap with GestureDetector to capture drawing gestures
-    // When not drawing, use multiple layers of gesture blocking to ensure complete transparency
-    // For S23 Ultra and similar devices, this ensures gestures pass through completely
     final overlayWidget = widget.isDrawing
         ? GestureDetector(
             onPanStart: _onPanStart,
@@ -302,9 +286,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           );
 
     // The overlay is positioned on top of the PDF viewer
-    // Annotations are stored with normalized coordinates and will render
-    // at their correct positions relative to the PDF content
-    // Use a Stack but ensure the overlay doesn't interfere with gestures when not drawing
+    // Annotations are stored with normalized coordinates (0-1) relative to overlay size
+    // These stay consistent regardless of scroll - overlay size represents visible PDF area
     return Stack(
       children: [
         widget.child, // PDF viewer - receives all gestures normally
@@ -337,23 +320,18 @@ class AnnotationPainter extends CustomPainter {
     this.textAnnotations = const [],
   });
 
-  // Convert document coordinates to screen coordinates
-  // documentY is the absolute position in the document (screenY + scrollOffset when drawn)
-  // screenY = documentY - currentScrollOffset
-  // If documentY is null (old annotations), use normalized coordinates
-  Offset _documentToScreen(Offset normalizedPoint, double? documentY) {
-    final screenX = normalizedPoint.dx * overlaySize.width;
-    // Use normalized coordinates primarily, documentY only for scroll compensation
-    // This ensures annotations stay fixed relative to the page content
-    final screenY = documentY != null
-        ? (documentY - scrollOffset).clamp(0.0, overlaySize.height) // Convert document position to screen position
-        : normalizedPoint.dy * overlaySize.height; // Fallback for old annotations
-    return Offset(screenX, screenY);
+  // Convert normalized coordinates (0-1) to screen coordinates
+  // Normalized coordinates are relative to overlay size and stay consistent
+  Offset _normalizedToScreen(Offset normalizedPoint) {
+    return Offset(
+      normalizedPoint.dx * overlaySize.width,
+      normalizedPoint.dy * overlaySize.height,
+    );
   }
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Update overlay size if it changed
+    // Use overlaySize for coordinate conversion (represents PDF viewport)
     final effectiveSize = overlaySize.width > 0 && overlaySize.height > 0 
         ? overlaySize 
         : size;
@@ -374,7 +352,7 @@ class AnnotationPainter extends CustomPainter {
 
       if (firstPoint.toolType == 'highlight') {
         paint.style = PaintingStyle.fill;
-        paint.color = firstPoint.color;
+        paint.color = firstPoint.color.withOpacity(0.4);
       } else {
         paint.style = PaintingStyle.stroke;
       }
@@ -384,8 +362,8 @@ class AnnotationPainter extends CustomPainter {
       }
 
       if (path.length >= 2) {
-        // Convert document coordinates to screen coordinates
-        final screenPoints = path.map((p) => _documentToScreen(p.normalizedPoint, p.documentY)).toList();
+        // Convert normalized coordinates to screen coordinates
+        final screenPoints = path.map((p) => _normalizedToScreen(p.normalizedPoint)).toList();
         
         if (firstPoint.toolType == 'underline') {
           // Draw horizontal line for underline
@@ -426,7 +404,7 @@ class AnnotationPainter extends CustomPainter {
 
       if (firstPoint.toolType == 'highlight') {
         paint.style = PaintingStyle.fill;
-        paint.color = firstPoint.color;
+        paint.color = firstPoint.color.withOpacity(0.4);
       } else {
         paint.style = PaintingStyle.stroke;
       }
@@ -435,8 +413,8 @@ class AnnotationPainter extends CustomPainter {
         paint.blendMode = BlendMode.clear;
       }
 
-      // Convert document coordinates to screen coordinates
-      final screenPoints = currentPath.map((p) => _documentToScreen(p.normalizedPoint, p.documentY)).toList();
+      // Convert normalized coordinates to screen coordinates
+      final screenPoints = currentPath.map((p) => _normalizedToScreen(p.normalizedPoint)).toList();
 
       if (firstPoint.toolType == 'underline') {
         // Draw horizontal line for underline
@@ -471,10 +449,10 @@ class AnnotationPainter extends CustomPainter {
     if (oldDelegate is AnnotationPainter) {
       return oldDelegate.overlaySize != overlaySize ||
           oldDelegate.currentPage != currentPage ||
+          oldDelegate.scrollOffset != scrollOffset ||
           oldDelegate.paths.length != paths.length ||
           oldDelegate.currentPath.length != currentPath.length;
     }
     return true;
   }
 }
-

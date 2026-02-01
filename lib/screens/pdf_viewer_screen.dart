@@ -72,6 +72,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isTextEditMode = false;
   List<TextAnnotation> _textAnnotations = []; // Instant text overlays (not saved to PDF yet)
   
+  // Text selection state (Sejda-style - select existing text to edit)
+  SelectedPDFText? _selectedPDFText;
+  Offset? _textSelectionToolbarPosition;
+  bool _showTextFormattingToolbar = false;
+  
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -2075,24 +2080,29 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         final pageSize = page.size;
         final screenSize = MediaQuery.of(context).size;
         
-        // Account for scroll offset when converting coordinates
-        // screenPosition is relative to visible area, need to add scroll offset
-        final absoluteScreenY = screenPosition.dy + _pdfScrollOffset;
+        // Convert screen position to PDF coordinates
+        // Syncfusion PDF viewer renders pages scaled to fit screen width
+        // We need to account for scroll offset and calculate which page we're on
         
-        // Get the PDF viewer's actual rendered size (may be different from screen size)
-        // For vertical scrolling, we need to calculate which part of the document is visible
-        // Simplified: assume PDF is rendered to fit screen width, height scales proportionally
+        // Calculate rendered PDF dimensions
+        // PDF is scaled to fit screen width, height scales proportionally
         final pdfAspectRatio = pageSize.height / pageSize.width;
-        final renderedPdfHeight = screenSize.width * pdfAspectRatio;
+        final renderedPdfWidth = screenSize.width;
+        final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
         
-        // Calculate which part of the PDF is visible (for multi-page vertical scroll)
-        // Each page has height = renderedPdfHeight
-        final pageStartY = (_currentPage - 1) * renderedPdfHeight;
-        final relativeY = absoluteScreenY - pageStartY;
+        // Account for scroll - screen position is relative to visible viewport
+        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
         
-        // Convert to PDF coordinates
-        final pdfX = (screenPosition.dx / screenSize.width) * pageSize.width;
-        final pdfY = (relativeY / renderedPdfHeight) * pageSize.height;
+        // Calculate which page this position belongs to (for multi-page vertical scroll)
+        final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
+        final pageStartY = pageIndex * renderedPdfHeight;
+        final relativeYInPage = absoluteDocumentY - pageStartY;
+        
+        // Convert to PDF page coordinates (points, not pixels)
+        // X: screen X position maps directly to PDF X (both scale with width)
+        final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
+        // Y: relative position in page maps to PDF Y
+        final pdfY = (relativeYInPage / renderedPdfHeight) * pageSize.height;
         
         // Clamp to page bounds
         final clampedX = pdfX.clamp(0.0, pageSize.width);

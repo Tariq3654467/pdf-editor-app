@@ -2,33 +2,33 @@ import 'dart:io';
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:flutter/material.dart';
 
+/// Represents a text element found in PDF
+class SelectedTextElement {
+  final String text;
+  final Rect bounds;
+  final int pageIndex;
+  final double fontSize;
+  final Color color;
+  final String? fontFamily;
+  final bool isBold;
+  final bool isItalic;
+  final Offset position; // Position in PDF coordinates
+
+  SelectedTextElement({
+    required this.text,
+    required this.bounds,
+    required this.pageIndex,
+    this.fontSize = 12.0,
+    this.color = Colors.black,
+    this.fontFamily,
+    this.isBold = false,
+    this.isItalic = false,
+    required this.position,
+  });
+}
+
 /// Service for detecting and editing selected text in PDF (Sejda-style)
 class PDFTextSelectionService {
-  /// Represents a text element found in PDF
-  static class SelectedTextElement {
-    final String text;
-    final Rect bounds;
-    final int pageIndex;
-    final double fontSize;
-    final Color color;
-    final String? fontFamily;
-    final bool isBold;
-    final bool isItalic;
-    final Offset position; // Position in PDF coordinates
-
-    SelectedTextElement({
-      required this.text,
-      required this.bounds,
-      required this.pageIndex,
-      this.fontSize = 12.0,
-      this.color = Colors.black,
-      this.fontFamily,
-      this.isBold = false,
-      this.isItalic = false,
-      required this.position,
-    });
-  }
-
   /// Find text at a specific position in PDF
   /// Returns null if no text found at that position
   static Future<SelectedTextElement?> findTextAtPosition(
@@ -99,8 +99,7 @@ class PDFTextSelectionService {
     int pageIndex,
     String oldText,
     String newText,
-    Offset position,
-    {
+    Offset position, {
     double? fontSize,
     Color? color,
     String? fontFamily,
@@ -203,9 +202,10 @@ class PDFTextSelectionService {
   }
 
   static sf.PdfFontStyle _getFontStyle(bool isBold, bool isItalic) {
-    if (isBold && isItalic) {
-      return sf.PdfFontStyle.boldItalic;
-    } else if (isBold) {
+    // Syncfusion PdfFontStyle is an enum, not a flags enum
+    // When both bold and italic are needed, we'll prioritize bold
+    // For true bold+italic, we'd need to use a different approach
+    if (isBold) {
       return sf.PdfFontStyle.bold;
     } else if (isItalic) {
       return sf.PdfFontStyle.italic;
@@ -213,5 +213,42 @@ class PDFTextSelectionService {
       return sf.PdfFontStyle.regular;
     }
   }
-}
+  
+  /// Check if PDF is a scanned document (image-based, no extractable text)
+  static Future<bool> isScannedDocument(String filePath) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return false;
+      }
 
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+
+      // Check first few pages for extractable text
+      final maxPagesToCheck = document.pages.count < 3 ? document.pages.count : 3;
+      final textExtractor = sf.PdfTextExtractor(document);
+      
+      bool hasText = false;
+      for (int i = 0; i < maxPagesToCheck; i++) {
+        final extractedText = textExtractor.extractText(
+          startPageIndex: i,
+          endPageIndex: i,
+        );
+        if (extractedText.trim().isNotEmpty) {
+          hasText = true;
+          break;
+        }
+      }
+
+      document.dispose();
+      
+      // If no text found in first few pages, likely a scanned document
+      return !hasText;
+    } catch (e) {
+      print('Error checking if document is scanned: $e');
+      // On error, assume it's not scanned to be safe
+      return false;
+    }
+  }
+}

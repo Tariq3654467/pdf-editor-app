@@ -19,6 +19,9 @@ import '../services/pdf_cache_service.dart';
 import '../services/theme_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
+import '../widgets/pdf_text_formatting_toolbar.dart';
+import '../models/selected_pdf_text.dart';
+import '../services/pdf_text_selection_service.dart';
 import '../widgets/in_app_file_picker.dart';
 
 class PDFViewerScreen extends StatefulWidget {
@@ -76,6 +79,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   SelectedPDFText? _selectedPDFText;
   Offset? _textSelectionToolbarPosition;
   bool _showTextFormattingToolbar = false;
+  bool _isScannedDocument = false; // Track if PDF is scanned (image-based)
   
   
   // View mode and orientation
@@ -489,6 +493,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         _isLoading = false;
         _errorMessage = null; // Clear any previous errors
       });
+      
+      // Check if document is scanned (image-based, no extractable text)
+      _checkIfScannedDocument();
+      
       // Scroll to current page after document loads - use multiple callbacks to ensure it works
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -501,6 +509,27 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           _scrollToCurrentPage();
         }
       });
+    }
+  }
+  
+  /// Check if PDF is a scanned document and disable text editing if so
+  Future<void> _checkIfScannedDocument() async {
+    try {
+      final isScanned = await PDFTextSelectionService.isScannedDocument(
+        _actualFilePath ?? widget.filePath,
+      );
+      
+      if (mounted) {
+        setState(() {
+          _isScannedDocument = isScanned;
+        });
+        
+        if (isScanned) {
+          print('PDFViewer: Scanned document detected - text editing disabled');
+        }
+      }
+    } catch (e) {
+      print('Error checking if document is scanned: $e');
     }
   }
   
@@ -1018,6 +1047,31 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             child: _buildPDFViewer(),
             ),
           ),
+          // Text formatting toolbar (appears when text is selected - Sejda-style)
+          if (_showTextFormattingToolbar && _selectedPDFText != null && _textSelectionToolbarPosition != null)
+            Positioned(
+              left: _textSelectionToolbarPosition!.dx.clamp(0.0, MediaQuery.of(context).size.width - 300),
+              top: _textSelectionToolbarPosition!.dy.clamp(0.0, MediaQuery.of(context).size.height - 100),
+              child: PDFTextFormattingToolbar(
+                isBold: _selectedPDFText!.isBold,
+                isItalic: _selectedPDFText!.isItalic,
+                fontFamily: _selectedPDFText!.fontFamily,
+                fontSize: _selectedPDFText!.fontSize,
+                textColor: _selectedPDFText!.color,
+                onBoldChanged: (isBold) => _applyTextFormatting(isBold: isBold),
+                onItalicChanged: (isItalic) => _applyTextFormatting(isItalic: isItalic),
+                onFontChanged: (font) => _applyTextFormatting(fontFamily: font),
+                onFontSizeChanged: (size) => _applyTextFormatting(fontSize: size),
+                onColorChanged: (color) => _applyTextFormatting(color: color),
+                onDelete: _deleteSelectedText,
+                onCopy: _copySelectedText,
+                onLink: () {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Link feature coming soon')),
+                  );
+                },
+              ),
+            ),
           // Page count indicator (briefly shown on page change)
           // Use IgnorePointer to ensure it doesn't block PDF scrolling
           Positioned(
@@ -2006,59 +2060,60 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
-  Future<void> _copySelectedText() async {
-    try {
-      // Syncfusion PDF viewer handles text selection natively
-      // Users can select text by long-pressing and dragging
-      // Once text is selected, they can copy it using the system's copy option
-      // This button provides instructions on how to copy text
-      
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (context) => AlertDialog(
-            title: const Text('Copy Text'),
-            content: const Text(
-              'To copy text from the PDF:\n\n'
-              '1. Long press on the text you want to copy\n'
-              '2. Drag to select the desired text\n'
-              '3. Use the system copy option from the context menu that appears\n\n'
-              'Text selection is enabled in the PDF viewer. The selected text will be automatically available for copying through the system menu.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: const Text('OK'),
-              ),
-            ],
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-          ),
-        );
-      }
-    }
+  void _copySelectedText() {
+    if (_selectedPDFText == null) return;
+    
+    Clipboard.setData(ClipboardData(text: _selectedPDFText!.text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Text copied to clipboard'),
+        duration: Duration(seconds: 2),
+      ),
+    );
   }
 
   Future<void> _handleTextEditTap(Offset position) async {
     if (!_isTextEditMode || _selectedTool != 'text') return;
     
-    // Simple: Just show dialog to add text at tap position
-    // True PDF editing - text will be added directly to PDF content
-    _showTextEditDialog(
-      initialText: '',
-      position: position,
-      isEditing: false,
-    );
+    // Don't allow text editing on scanned documents
+    if (_isScannedDocument) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Text editing is not available for scanned documents. This PDF contains only images.'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    // First try to find existing text at tap position
+    await _handlePDFTextTap(position);
+    
+    // If no text found, show dialog to add new text
+    if (_selectedPDFText == null) {
+      _showTextEditDialog(
+        initialText: '',
+        position: position,
+        isEditing: false,
+      );
+    }
   }
   
   Future<void> _addTextToPDF(String text, Offset screenPosition) async {
     if (text.isEmpty) return;
+    
+    // Don't allow adding text to scanned documents
+    if (_isScannedDocument) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Text editing is not available for scanned documents. This PDF contains only images.'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
     
     try {
       // Show loading
@@ -2186,6 +2241,240 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       ),
       isEditing: true,
       existingAnnotation: textAnnotation,
+    );
+  }
+  
+  /// Handle tap on PDF to detect and select text (Sejda-style)
+  Future<void> _handlePDFTextTap(Offset screenPosition) async {
+    // Don't allow text editing on scanned documents
+    if (_isScannedDocument) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Text editing is not available for scanned documents. This PDF contains only images.'),
+          duration: Duration(seconds: 3),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+    
+    try {
+      // Convert screen position to PDF coordinates
+      final file = File(_actualFilePath ?? widget.filePath);
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+      
+      if (_currentPage - 1 >= 0 && _currentPage - 1 < document.pages.count) {
+        final page = document.pages[_currentPage - 1];
+        final pageSize = page.size;
+        final screenSize = MediaQuery.of(context).size;
+        
+        // Calculate rendered PDF dimensions
+        final pdfAspectRatio = pageSize.height / pageSize.width;
+        final renderedPdfWidth = screenSize.width;
+        final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+        
+        // Account for scroll
+        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
+        final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
+        final pageStartY = pageIndex * renderedPdfHeight;
+        final relativeYInPage = absoluteDocumentY - pageStartY;
+        
+        // Convert to PDF coordinates
+        final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
+        final pdfY = (relativeYInPage / renderedPdfHeight) * pageSize.height;
+        final pdfPosition = Offset(pdfX, pdfY);
+        
+        // Try to find text at this position
+        final selectedText = await PDFTextSelectionService.findTextAtPosition(
+          _actualFilePath ?? widget.filePath,
+          _currentPage - 1,
+          pdfPosition,
+        );
+        
+        document.dispose();
+        
+        if (selectedText != null) {
+          // Text found - show formatting toolbar
+          setState(() {
+            _selectedPDFText = SelectedPDFText(
+              text: selectedText.text,
+              bounds: selectedText.bounds,
+              pageIndex: selectedText.pageIndex,
+              position: selectedText.position,
+              fontSize: selectedText.fontSize,
+              color: selectedText.color,
+              fontFamily: selectedText.fontFamily,
+              isBold: selectedText.isBold,
+              isItalic: selectedText.isItalic,
+            );
+            // Position toolbar above the selected text
+            _textSelectionToolbarPosition = Offset(
+              screenPosition.dx - 150, // Center toolbar
+              screenPosition.dy - 60, // Above tap position
+            );
+            _showTextFormattingToolbar = true;
+          });
+        } else {
+          // No text found - hide toolbar
+          setState(() {
+            _selectedPDFText = null;
+            _showTextFormattingToolbar = false;
+          });
+        }
+      } else {
+        document.dispose();
+      }
+    } catch (e) {
+      print('Error handling PDF text tap: $e');
+    }
+  }
+  
+  /// Apply text formatting to selected text
+  Future<void> _applyTextFormatting({
+    bool? isBold,
+    bool? isItalic,
+    String? fontFamily,
+    double? fontSize,
+    Color? color,
+  }) async {
+    if (_selectedPDFText == null) return;
+    
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+      
+      // Update selected text properties
+      final updatedText = _selectedPDFText!.copyWith(
+        isBold: isBold ?? _selectedPDFText!.isBold,
+        isItalic: isItalic ?? _selectedPDFText!.isItalic,
+        fontFamily: fontFamily ?? _selectedPDFText!.fontFamily,
+        fontSize: fontSize ?? _selectedPDFText!.fontSize,
+        color: color ?? _selectedPDFText!.color,
+      );
+      
+      // Replace text in PDF with formatted version
+      final success = await PDFTextSelectionService.replaceTextWithFormatting(
+        _actualFilePath ?? widget.filePath,
+        _selectedPDFText!.pageIndex,
+        _selectedPDFText!.text,
+        _selectedPDFText!.text, // Keep same text, just change formatting
+        _selectedPDFText!.position,
+        fontSize: updatedText.fontSize,
+        color: updatedText.color,
+        fontFamily: updatedText.fontFamily,
+        isBold: updatedText.isBold,
+        isItalic: updatedText.isItalic,
+      );
+      
+      if (mounted) {
+        Navigator.pop(context); // Close loading
+        
+        if (success) {
+          setState(() {
+            _selectedPDFText = updatedText;
+            _pdfReloadKey++; // Reload PDF to show changes
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text formatting applied'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error applying formatting'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+  
+  /// Delete selected text
+  Future<void> _deleteSelectedText() async {
+    if (_selectedPDFText == null) return;
+    
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+      
+      // Replace text with empty string (effectively deletes it)
+      final success = await PDFTextSelectionService.replaceTextWithFormatting(
+        _actualFilePath ?? widget.filePath,
+        _selectedPDFText!.pageIndex,
+        _selectedPDFText!.text,
+        '', // Empty string = delete
+        _selectedPDFText!.position,
+      );
+      
+      if (mounted) {
+        Navigator.pop(context);
+        
+        if (success) {
+          setState(() {
+            _selectedPDFText = null;
+            _showTextFormattingToolbar = false;
+            _pdfReloadKey++; // Reload PDF
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text deleted'),
+              backgroundColor: Colors.green,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error deleting text: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+  
+  /// Copy selected text to clipboard
+  void _copySelectedText() {
+    if (_selectedPDFText == null) return;
+    
+    Clipboard.setData(ClipboardData(text: _selectedPDFText!.text));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Text copied to clipboard'),
+        duration: Duration(seconds: 2),
+      ),
     );
   }
 

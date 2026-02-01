@@ -79,15 +79,14 @@ class MainActivity : FlutterActivity() {
             }
         }
         
-        // Channel for PDF scanning
+        // Channel for PDF scanning and SAF access
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_SCAN_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "scanPDFs" -> {
-                    // CRITICAL: Run heavy scan on background thread to avoid ANR
-                    // Samsung devices (S23 Ultra etc.) are very sensitive to long operations
+                    // Scan PDFs from stored SAF URIs (app-managed index)
                     Thread {
                         try {
-                            val pdfList = scanAllPDFs()
+                            val pdfList = scanPDFsFromSAFIndex()
                             // Post result back on main thread
                             runOnUiThread {
                                 try {
@@ -108,13 +107,36 @@ class MainActivity : FlutterActivity() {
                         }
                     }.start()
                 }
-                "requestStorageAccess" -> {
+                "requestSAFAccess" -> {
+                    // Request SAF access - user selects PDF or folder
                     pendingResult = result
-                    requestStorageAccess()
+                    requestSAFAccess()
                 }
-                "hasStorageAccess" -> {
-                    val hasAccess = hasStorageAccess()
+                "hasSAFAccess" -> {
+                    // Check if we have any stored SAF URIs
+                    val hasAccess = hasSAFAccess()
                     result.success(hasAccess)
+                }
+                "addSAFUri" -> {
+                    // Add a SAF URI to the index (from user selection)
+                    try {
+                        val uriString = call.arguments as? String
+                        if (uriString != null) {
+                            val uri = Uri.parse(uriString)
+                            addSAFUriToIndex(uri)
+                            result.success(true)
+                        } else {
+                            result.error("INVALID_ARGUMENT", "URI string is null", null)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("PDFScan", "Error adding SAF URI", e)
+                        result.error("ADD_ERROR", e.message, null)
+                    }
+                }
+                "getStoredSAFUriCount" -> {
+                    // Get count of stored SAF URIs
+                    val count = getStoredSAFUriCount()
+                    result.success(count)
                 }
                 else -> result.notImplemented()
             }
@@ -231,19 +253,21 @@ class MainActivity : FlutterActivity() {
                     var collectionCount = 0
                     
                     // Use combined filter: MIME type OR file extension
+                    // Note: Downloads collection may not have MIME_TYPE column on all devices
                     val selection = when {
                         collectionName == "Downloads" -> {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                "${MediaStore.Downloads.MIME_TYPE} = ? OR ${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
-                            } else {
-                                "${MediaStore.Downloads.DISPLAY_NAME} LIKE ?"
-                            }
+                            // Downloads: Use file extension only (more reliable)
+                            "${MediaStore.Downloads.DISPLAY_NAME} LIKE ? OR LOWER(${MediaStore.Downloads.DISPLAY_NAME}) LIKE ?"
                         }
                         else -> {
+                            // Files: Use MIME type OR extension
                             "${MediaStore.Files.FileColumns.MIME_TYPE} = ? OR ${MediaStore.Files.FileColumns.DISPLAY_NAME} LIKE ?"
                         }
                     }
-                    val selectionArgs = arrayOf("application/pdf", "%.pdf")
+                    val selectionArgs = when {
+                        collectionName == "Downloads" -> arrayOf("%.pdf", "%.pdf")
+                        else -> arrayOf("application/pdf", "%.pdf")
+                    }
                     val sortOrder = when {
                         collectionName == "Downloads" -> "${MediaStore.Downloads.DATE_MODIFIED} DESC"
                         else -> "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"

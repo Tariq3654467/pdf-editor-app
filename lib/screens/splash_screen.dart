@@ -405,13 +405,11 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
           });
         });
         
-        // 3) Trigger automatic background scan if enabled
+        // 3) Check SAF access and request if needed (first launch)
         if (_enableAutomaticDeviceScan) {
           Future.delayed(const Duration(milliseconds: 500), () {
             if (!mounted) return;
-            // Start background scan (non-blocking, with timeouts)
-            // No permission check needed - MediaStore works without permissions
-            _loadPDFs(forceRescan: false);
+            _checkAndRequestSAFAccess();
           });
         }
       } catch (e, stackTrace) {
@@ -513,12 +511,101 @@ class _MyHomePageState extends State<MyHomePage> with AutomaticKeepAliveClientMi
     }
   }
   
-  /// No permission check needed - MediaStore works without permissions
-  /// This method is kept for compatibility but does nothing
+  /// Check SAF access and request if needed (first launch)
+  Future<void> _checkAndRequestSAFAccess() async {
+    if (!mounted || kIsWeb || !io.Platform.isAndroid) return;
+    
+    try {
+      // Check if we have SAF access (stored SAF URIs)
+      final hasAccess = await PDFService.hasSAFAccess();
+      final uriCount = await PDFService.getStoredSAFUriCount();
+      
+      print("PDFScan: SAF access check: hasAccess=$hasAccess, uriCount=$uriCount");
+      
+      if (!hasAccess || uriCount == 0) {
+        // First launch - request SAF access
+        print("PDFScan: No SAF access - requesting on first launch");
+        
+        // Show dialog explaining SAF access
+        if (mounted) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _showSAFAccessDialog();
+          });
+        }
+      } else {
+        // We have SAF access - load PDFs
+        print("PDFScan: SAF access available - loading PDFs");
+        _loadPDFs(forceRescan: false);
+      }
+    } catch (e) {
+      print('Error checking SAF access: $e');
+      // On error, try to load PDFs anyway (might have app-created PDFs)
+      _loadPDFs(forceRescan: false);
+    }
+  }
+  
+  /// Show SAF access dialog on first launch
+  Future<void> _showSAFAccessDialog() async {
+    if (!mounted) return;
+    
+    final shouldRequest = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Select PDFs or Folders'),
+        content: const Text(
+          'To access your PDFs, please select a folder containing PDFs.\n\n'
+          'You can select:\n'
+          '• Downloads folder\n'
+          '• Documents folder\n'
+          '• Any folder with PDFs\n\n'
+          'The app will remember your selection and load PDFs automatically.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Skip'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFE53935),
+            ),
+            child: const Text('Select Folder', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+    
+    if (shouldRequest == true && mounted) {
+      // Request SAF access
+      final granted = await PDFService.requestSAFAccess();
+      if (granted && mounted) {
+        // SAF access granted - reload PDFs
+        _loadPDFs(forceRescan: true);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Folder selected! Loading PDFs...'),
+            duration: Duration(seconds: 2),
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please select a folder to access PDFs'),
+            duration: Duration(seconds: 3),
+          ),
+        );
+      }
+    } else if (mounted) {
+      // User skipped - still try to load app-created PDFs
+      _loadPDFs(forceRescan: false);
+    }
+  }
+  
+  /// Legacy method - kept for compatibility
   Future<void> _checkAndRequestAccess() async {
-    // No permissions needed - MediaStore works without any storage permissions
-    // PDFs are loaded automatically via MediaStore API (permission-less)
-    return;
+    return _checkAndRequestSAFAccess();
   }
 
   Future<void> _loadToolsHistory() async {

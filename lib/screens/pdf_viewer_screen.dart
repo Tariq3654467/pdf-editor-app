@@ -14,9 +14,12 @@ import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../services/pdf_text_editor_service.dart';
+import '../services/pdf_content_editor_service.dart';
+import '../services/pdf_cache_service.dart';
 import '../services/theme_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
+import '../widgets/pdf_content_editor.dart';
 import '../widgets/in_app_file_picker.dart';
 
 class PDFViewerScreen extends StatefulWidget {
@@ -56,6 +59,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   
   // Annotation/Editing state
   bool _isEditingMode = false;
+  bool _isContentEditMode = false; // True content editing mode (Sejda-style)
   String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
   Color _selectedColor = Colors.red;
   double _strokeWidth = 3.0;
@@ -68,6 +72,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   String? _editingText;
   bool _isTextEditMode = false;
   List<TextAnnotation> _textAnnotations = []; // Instant text overlays (not saved to PDF yet)
+  
+  // Content editing state (true PDF content editing)
+  String? _editableCopyPath; // Path to editable copy of PDF
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -939,6 +946,54 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         bottom: false,
         child: Stack(
           children: [
+            // Show content editor if in content edit mode
+            if (_isContentEditMode && _editableCopyPath != null)
+              PDFContentEditor(
+                filePath: _editableCopyPath!,
+                currentPage: _currentPage,
+                onSave: (savedPath) async {
+                  // Replace original with edited copy
+                  try {
+                    final originalFile = File(_actualFilePath ?? widget.filePath);
+                    final editedFile = File(savedPath);
+                    if (await editedFile.exists()) {
+                      await originalFile.writeAsBytes(await editedFile.readAsBytes());
+                      // Update cache
+                      await PDFCacheService.clearCache();
+                      // Reload PDF
+                      setState(() {
+                        _pdfReloadKey++;
+                        _isContentEditMode = false;
+                        _editableCopyPath = null;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('PDF saved successfully!'),
+                          backgroundColor: Colors.green,
+                        ),
+                      );
+                    }
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error saving PDF: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                },
+                onCancel: () {
+                  setState(() {
+                    _isContentEditMode = false;
+                    // Optionally delete editable copy
+                    if (_editableCopyPath != null) {
+                      File(_editableCopyPath!).delete();
+                      _editableCopyPath = null;
+                    }
+                  });
+                },
+              )
+            else
             // PDF Viewer with annotation overlay
             PDFAnnotationOverlay(
             key: _annotationOverlayKey,
@@ -1199,6 +1254,38 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 ),
               );
             },
+          ),
+          // Content Edit mode (True PDF content editing - Sejda-style)
+          _buildToolButton(
+            icon: Icons.edit_document,
+            label: 'Content Edit',
+            isSelected: _isContentEditMode,
+            onTap: () async {
+              // Create editable copy if not exists
+              if (_editableCopyPath == null) {
+                final copyPath = await PDFContentEditorService.createEditableCopy(_actualFilePath ?? widget.filePath);
+                if (copyPath != null) {
+                  setState(() {
+                    _editableCopyPath = copyPath;
+                    _isContentEditMode = true;
+                    _isEditingMode = false; // Exit annotation mode
+                  });
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Error creating editable copy'),
+                      backgroundColor: Colors.red,
+                    ),
+                  );
+                }
+              } else {
+                setState(() {
+                  _isContentEditMode = true;
+                  _isEditingMode = false; // Exit annotation mode
+                });
+              }
+            },
+            color: Colors.orange,
           ),
           // Done button
           _buildToolButton(

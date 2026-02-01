@@ -22,7 +22,8 @@ import java.io.InputStream
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.pdf_editor_app/file_intent"
     private val PDF_SCAN_CHANNEL = "com.example.pdf_editor_app/pdf_scan"
-    private val SAF_REQUEST_CODE = 1001
+    private val SAF_REQUEST_CODE_TREE = 1001
+    private val SAF_REQUEST_CODE_DOCUMENT = 1002
     private var pendingResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -143,40 +144,232 @@ class MainActivity : FlutterActivity() {
         }
     }
     
-    private fun scanAllPDFs(): List<Map<String, Any>> {
+    // SAF-based PDF scanning (app-managed index)
+    private fun scanPDFsFromSAFIndex(): List<Map<String, Any>> {
         val pdfList = mutableListOf<Map<String, Any>>()
-        val seenPaths = mutableSetOf<String>()
+        val seenUris = mutableSetOf<String>()
         
-        android.util.Log.d("PDFScan", "Starting PDF scan (permission-less MediaStore only)...")
+        android.util.Log.d("PDFScan", "=== Scanning PDFs from SAF index (app-managed) ===")
         
         try {
-            // ONLY use MediaStore - no permissions required
-            // This works on all Android versions without any storage permissions
-            android.util.Log.d("PDFScan", "Scanning with MediaStore (Android ${Build.VERSION.SDK_INT})")
-            val mediaStorePDFs = scanPDFsWithMediaStore()
-            android.util.Log.d("PDFScan", "MediaStore found ${mediaStorePDFs.size} PDFs")
+            // Get all stored SAF URIs
+            val storedUris = getStoredSAFUriList()
+            android.util.Log.d("PDFScan", "Found ${storedUris.size} stored SAF URIs")
             
-            for (pdf in mediaStorePDFs) {
-                val path = pdf["path"] as? String
-                if (path != null && !seenPaths.contains(path)) {
-                    seenPaths.add(path)
-                    pdfList.add(pdf)
+            if (storedUris.isEmpty()) {
+                android.util.Log.d("PDFScan", "No SAF URIs stored - user needs to select PDFs/folders first")
+                return pdfList
+            }
+            
+            // Scan each stored SAF URI
+            for (uriString in storedUris) {
+                try {
+                    val uri = Uri.parse(uriString)
+                    
+                    // Check if it's a tree URI (folder) or document URI (single file)
+                    if (DocumentsContract.isTreeUri(uri)) {
+                        // It's a folder - scan recursively
+                        android.util.Log.d("PDFScan", "Scanning SAF folder: $uriString")
+                        val treePDFs = scanPDFsFromSAFUri(uri)
+                        for (pdf in treePDFs) {
+                            val pdfUri = pdf["path"] as? String
+                            if (pdfUri != null && !seenUris.contains(pdfUri)) {
+                                seenUris.add(pdfUri)
+                                pdfList.add(pdf)
+                            }
+                        }
+                    } else {
+                        // It's a single file - check if it's a PDF
+                        val pdfInfo = getPDFInfoFromUri(uri)
+                        if (pdfInfo != null) {
+                            val pdfUri = pdfInfo["path"] as? String
+                            if (pdfUri != null && !seenUris.contains(pdfUri)) {
+                                seenUris.add(pdfUri)
+                                pdfList.add(pdfInfo)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("PDFScan", "Error scanning SAF URI: $uriString", e)
                 }
             }
-        } catch (e: OutOfMemoryError) {
-            android.util.Log.e("PDFScan", "Out of memory during scan", e)
-            e.printStackTrace()
-            // Return what we have so far
-            android.util.Log.d("PDFScan", "Returning ${pdfList.size} PDFs before OOM")
+            
+            // Also scan app-created PDFs from MediaStore (these don't need SAF)
+            try {
+                val appPDFs = scanAppCreatedPDFs()
+                for (pdf in appPDFs) {
+                    val pdfUri = pdf["path"] as? String
+                    if (pdfUri != null && !seenUris.contains(pdfUri)) {
+                        seenUris.add(pdfUri)
+                        pdfList.add(pdf)
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("PDFScan", "Error scanning app-created PDFs", e)
+            }
+            
+            // Sort by date modified (newest first)
+            pdfList.sortByDescending { it["dateModified"] as Long }
+            
         } catch (e: Exception) {
-            android.util.Log.e("PDFScan", "MediaStore scan error", e)
-            e.printStackTrace()
-        } catch (e: Throwable) {
-            android.util.Log.e("PDFScan", "Unexpected error during scan", e)
+            android.util.Log.e("PDFScan", "Error scanning SAF index", e)
             e.printStackTrace()
         }
         
-        android.util.Log.d("PDFScan", "Total PDFs found: ${pdfList.size}")
+        android.util.Log.d("PDFScan", "=== SAF index scan complete: ${pdfList.size} PDFs ===")
+        return pdfList
+    }
+    
+    // Request SAF access - user selects PDF or folder
+    // Uses ACTION_OPEN_DOCUMENT_TREE for folder selection (recommended for multiple PDFs)
+    private fun requestSAFAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            try {
+                // Use ACTION_OPEN_DOCUMENT_TREE for folder access
+                // This allows user to select a folder containing PDFs
+                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                    
+                    // Try to set initial URI to Downloads folder
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        try {
+                            val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload")
+                            putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
+                            android.util.Log.d("PDFScan", "Setting initial URI to Downloads folder")
+                        } catch (e: Exception) {
+                            android.util.Log.d("PDFScan", "Could not set initial URI")
+                        }
+                    }
+                }
+                startActivityForResult(intent, SAF_REQUEST_CODE_TREE)
+            } catch (e: Exception) {
+                android.util.Log.e("PDFScan", "Error requesting SAF access", e)
+                pendingResult?.error("REQUEST_ERROR", "Failed to request SAF access: ${e.message}", null)
+                pendingResult = null
+            }
+        } else {
+            pendingResult?.success(false)
+            pendingResult = null
+        }
+    }
+    
+    // Check if we have stored SAF URIs
+    private fun hasSAFAccess(): Boolean {
+        val storedUris = getStoredSAFUriList()
+        return storedUris.isNotEmpty()
+    }
+    
+    // Get count of stored SAF URIs
+    private fun getStoredSAFUriCount(): Int {
+        return getStoredSAFUriList().size
+    }
+    
+    // Get list of stored SAF URIs from SharedPreferences
+    private fun getStoredSAFUriList(): List<String> {
+        val prefs = getSharedPreferences("pdf_editor_prefs", MODE_PRIVATE)
+        val uriSet = prefs.getStringSet("saf_uri_list", null)
+        return uriSet?.toList() ?: emptyList()
+    }
+    
+    // Add SAF URI to stored list
+    private fun addSAFUriToIndex(uri: Uri) {
+        try {
+            // Take persistent permission
+            contentResolver.takePersistableUriPermission(
+                uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+            
+            // Save URI to SharedPreferences
+            val prefs = getSharedPreferences("pdf_editor_prefs", MODE_PRIVATE)
+            val existingUris = prefs.getStringSet("saf_uri_list", null)?.toMutableSet() ?: mutableSetOf()
+            existingUris.add(uri.toString())
+            prefs.edit().putStringSet("saf_uri_list", existingUris).apply()
+            
+            android.util.Log.d("PDFScan", "Added SAF URI to index: $uri (total: ${existingUris.size})")
+        } catch (e: Exception) {
+            android.util.Log.e("PDFScan", "Error adding SAF URI to index", e)
+            throw e
+        }
+    }
+    
+    // Get PDF info from a single document URI
+    private fun getPDFInfoFromUri(uri: Uri): Map<String, Any>? {
+        try {
+            val cursor: Cursor? = contentResolver.query(
+                uri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_SIZE,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                ),
+                null, null, null
+            )
+            
+            cursor?.use {
+                if (it.moveToFirst()) {
+                    val nameIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                    val sizeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE)
+                    val dateIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                    val mimeIndex = it.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                    
+                    val name = it.getString(nameIndex) ?: "Unknown.pdf"
+                    val size = it.getLong(sizeIndex)
+                    val dateModified = it.getLong(dateIndex)
+                    val mimeType = it.getString(mimeIndex) ?: ""
+                    
+                    // Check if it's a PDF
+                    if (!name.lowercase().endsWith(".pdf") && mimeType != "application/pdf") {
+                        return null
+                    }
+                    
+                    return mapOf(
+                        "path" to uri.toString(),
+                        "name" to name,
+                        "size" to size,
+                        "dateModified" to dateModified,
+                        "isContentUri" to true,
+                        "folderPath" to "Selected Files",
+                        "folderName" to "Selected Files"
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PDFScan", "Error getting PDF info from URI", e)
+        }
+        return null
+    }
+    
+    // Scan PDFs created by this app (using MediaStore - these are always accessible)
+    private fun scanAppCreatedPDFs(): List<Map<String, Any>> {
+        val pdfList = mutableListOf<Map<String, Any>>()
+        
+        try {
+            // Scan app's PDF directory (app-created PDFs)
+            val appPdfDir = File(filesDir.parent, "PDFs")
+            if (appPdfDir.exists() && appPdfDir.isDirectory) {
+                val files = appPdfDir.listFiles()
+                files?.forEach { file ->
+                    if (file.isFile && file.name.lowercase().endsWith(".pdf")) {
+                        pdfList.add(mapOf(
+                            "path" to file.absolutePath,
+                            "name" to file.name,
+                            "size" to file.length(),
+                            "dateModified" to file.lastModified(),
+                            "isContentUri" to false,
+                            "folderPath" to appPdfDir.absolutePath,
+                            "folderName" to "App Files"
+                        ))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PDFScan", "Error scanning app-created PDFs", e)
+        }
+        
         return pdfList
     }
     
@@ -788,81 +981,32 @@ class MainActivity : FlutterActivity() {
         return result
     }
 
+    // Legacy method - kept for compatibility, redirects to new SAF method
     private fun requestStorageAccess() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            try {
-                // Request access to storage directory
-                // Note: Some devices don't allow root folder access, so we'll let user choose
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                    flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-                    
-                    // Try to set initial URI to Downloads folder (more likely to work than root)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        try {
-                            // Try Downloads folder first (most common location for PDFs)
-                            val downloadsUri = Uri.parse("content://com.android.externalstorage.documents/tree/primary%3ADownload")
-                            putExtra(DocumentsContract.EXTRA_INITIAL_URI, downloadsUri)
-                            android.util.Log.d("PDFScan", "Setting initial URI to Downloads folder")
-                        } catch (e: Exception) {
-                            android.util.Log.d("PDFScan", "Could not set initial URI, user will select manually")
-                        }
-                    }
-                }
-                startActivityForResult(intent, SAF_REQUEST_CODE)
-            } catch (e: Exception) {
-                android.util.Log.e("PDFScan", "Error requesting storage access", e)
-                pendingResult?.error("REQUEST_ERROR", "Failed to request storage access: ${e.message}", null)
-                pendingResult = null
-            }
-        } else {
-            pendingResult?.success(false)
-            pendingResult = null
-        }
+        requestSAFAccess()
     }
     
+    // Legacy method - kept for compatibility
     private fun hasStorageAccess(): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
-            val prefs = getSharedPreferences("pdf_editor_prefs", MODE_PRIVATE)
-            val treeUri = prefs.getString("storage_tree_uri", null)
-            if (treeUri != null) {
-                try {
-                    val uri = Uri.parse(treeUri)
-                    contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                    return true
-                } catch (e: Exception) {
-                    android.util.Log.w("PDFScan", "Stored URI no longer valid", e)
-                    prefs.edit().remove("storage_tree_uri").apply()
-                }
-            }
-        }
-        return false
+        return hasSAFAccess()
     }
     
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         
-        if (requestCode == SAF_REQUEST_CODE) {
+        if (requestCode == SAF_REQUEST_CODE_TREE || requestCode == SAF_REQUEST_CODE_DOCUMENT) {
             if (resultCode == RESULT_OK && data != null) {
-                val treeUri = data.data
-                if (treeUri != null) {
+                val selectedUri = data.data
+                if (selectedUri != null) {
                     try {
-                        // Take persistent permission
-                        contentResolver.takePersistableUriPermission(
-                            treeUri,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                        )
+                        // Add URI to SAF index (this also takes persistent permission)
+                        addSAFUriToIndex(selectedUri)
                         
-                        // Save URI for future use
-                        val prefs = getSharedPreferences("pdf_editor_prefs", MODE_PRIVATE)
-                        prefs.edit().putString("storage_tree_uri", treeUri.toString()).apply()
-                        
-                        android.util.Log.d("PDFScan", "Storage access granted: $treeUri")
+                        android.util.Log.d("PDFScan", "SAF access granted: $selectedUri (type: ${if (requestCode == SAF_REQUEST_CODE_TREE) "TREE" else "DOCUMENT"})")
                         pendingResult?.success(true)
                     } catch (e: Exception) {
-                        android.util.Log.e("PDFScan", "Error taking persistent permission", e)
-                        pendingResult?.error("PERMISSION_ERROR", "Failed to take permission: ${e.message}", null)
+                        android.util.Log.e("PDFScan", "Error adding SAF URI", e)
+                        pendingResult?.error("PERMISSION_ERROR", "Failed to add SAF URI: ${e.message}", null)
                     }
                 } else {
                     pendingResult?.success(false)

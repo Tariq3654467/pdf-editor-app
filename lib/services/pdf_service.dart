@@ -12,30 +12,69 @@ import 'pdf_storage_service.dart';
 class PDFService {
   static const MethodChannel _pdfScanChannel = MethodChannel('com.example.pdf_editor_app/pdf_scan');
   
-  static Future<bool> hasStorageAccess() async {
+  /// Check if we have SAF access (stored SAF URIs)
+  static Future<bool> hasSAFAccess() async {
     if (Platform.isAndroid) {
       try {
-        final result = await _pdfScanChannel.invokeMethod<bool>('hasStorageAccess');
+        final result = await _pdfScanChannel.invokeMethod<bool>('hasSAFAccess');
         return result ?? false;
       } catch (e) {
-        print('PDFService: Error checking storage access: $e');
+        print('PDFService: Error checking SAF access: $e');
         return false;
       }
     }
     return false;
   }
   
-  static Future<bool> requestStorageAccess() async {
+  /// Request SAF access - user selects PDF or folder
+  static Future<bool> requestSAFAccess() async {
     if (Platform.isAndroid) {
       try {
-        final result = await _pdfScanChannel.invokeMethod<bool>('requestStorageAccess');
+        final result = await _pdfScanChannel.invokeMethod<bool>('requestSAFAccess');
         return result ?? false;
       } catch (e) {
-        print('PDFService: Error requesting storage access: $e');
+        print('PDFService: Error requesting SAF access: $e');
         return false;
       }
     }
     return false;
+  }
+  
+  /// Get count of stored SAF URIs
+  static Future<int> getStoredSAFUriCount() async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<int>('getStoredSAFUriCount');
+        return result ?? 0;
+      } catch (e) {
+        print('PDFService: Error getting SAF URI count: $e');
+        return 0;
+      }
+    }
+    return 0;
+  }
+  
+  /// Add a SAF URI to the index (from user selection)
+  static Future<bool> addSAFUri(String uriString) async {
+    if (Platform.isAndroid) {
+      try {
+        final result = await _pdfScanChannel.invokeMethod<bool>('addSAFUri', uriString);
+        return result ?? false;
+      } catch (e) {
+        print('PDFService: Error adding SAF URI: $e');
+        return false;
+      }
+    }
+    return false;
+  }
+  
+  // Legacy methods - kept for compatibility
+  static Future<bool> hasStorageAccess() async {
+    return hasSAFAccess();
+  }
+  
+  static Future<bool> requestStorageAccess() async {
+    return requestSAFAccess();
   }
 
   static Future<List<PDFFile>> loadPDFsFromDevice() async {

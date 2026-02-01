@@ -75,10 +75,10 @@ class PDFScannerService {
             return await _scanAppDirectory(bookmarks, recentAccess, saveToCache: saveToCache);
           }
           
-          // CRITICAL: If MediaStore returns empty, don't clear cache - keep existing cache
-          // Only scan app directory for app-managed PDFs, but preserve MediaStore cache
+          // CRITICAL: If SAF scan returns empty, don't clear cache - keep existing cache
+          // Only scan app directory for app-managed PDFs, but preserve SAF cache
           if (result.isEmpty) {
-            print('PDFScannerService: MediaStore scan returned empty - preserving existing cache');
+            print('PDFScannerService: SAF scan returned empty - preserving existing cache');
             print('PDFScannerService: Scanning app directory for app-managed PDFs only');
             final appPDFs = await _scanAppDirectory(bookmarks, recentAccess, saveToCache: false);
             
@@ -263,7 +263,7 @@ class PDFScannerService {
             return bDate.compareTo(aDate);
           });
           
-          print('PDFScannerService: Scanned ${pdfFiles.length} PDFs from MediaStore');
+          print('PDFScannerService: Scanned ${pdfFiles.length} PDFs from SAF index');
           
           // CRITICAL: Only save to cache if we have PDFs
           // Never overwrite cache with empty list (preserves existing cache)
@@ -271,7 +271,7 @@ class PDFScannerService {
             await PDFCacheService.savePDFList(pdfFiles);
             print('PDFScannerService: Saved ${pdfFiles.length} PDFs to cache');
           } else if (pdfFiles.isEmpty) {
-            print('PDFScannerService: MediaStore returned empty - preserving existing cache');
+            print('PDFScannerService: SAF scan returned empty - preserving existing cache');
           }
           
           return pdfFiles;
@@ -430,11 +430,11 @@ class PDFScannerService {
   }
   
   /// Request storage permission (Android)
-  /// NOTE: This app does NOT request storage permissions - uses MediaStore only
+  /// NOTE: This app does NOT request storage permissions - uses SAF (Storage Access Framework) only
   /// This method is kept for compatibility but always returns true
   static Future<bool> requestStoragePermission() async {
-    // No permissions needed - MediaStore works without permissions
-    print('PDFScannerService: No permission request needed - using MediaStore (permission-less)');
+    // No permissions needed - SAF works without permissions (user selects files/folders)
+    print('PDFScannerService: No permission request needed - using SAF (user-selected access)');
     return true;
   }
   

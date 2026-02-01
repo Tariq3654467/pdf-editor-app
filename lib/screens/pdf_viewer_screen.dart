@@ -1030,6 +1030,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           children: [
             // PDF Viewer with text-aware annotation overlay
             TextAwareAnnotationOverlay(
+            key: _textAwareOverlayKey,
             pdfPath: _actualFilePath ?? widget.filePath,
             currentPage: _currentPage - 1, // Convert to 0-based
             pageSize: _pdfPageSize ?? Size(612, 792), // Default US Letter if not loaded
@@ -1042,6 +1043,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             onAnnotationsChanged: (annotations) {
               setState(() {
                 _savedAnnotations = annotations;
+              });
+            },
+            onUndoStateChanged: (canUndo) {
+              setState(() {
+                _canUndo = canUndo;
+              });
+            },
+            onRedoStateChanged: (canRedo) {
+              setState(() {
+                _canRedo = canRedo;
               });
             },
             child: NotificationListener<ScrollNotification>(
@@ -1245,6 +1256,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: false,
             onTap: _canUndo
                 ? () {
+                  // Try TextAwareAnnotationOverlay first (new system)
+                  _textAwareOverlayKey.currentState?.undo();
+                  // Fallback to old overlay if needed
                   _annotationOverlayKey.currentState?.undo();
                 }
                 : null,
@@ -1256,6 +1270,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: false,
             onTap: _canRedo
                 ? () {
+                  // Try TextAwareAnnotationOverlay first (new system)
+                  _textAwareOverlayKey.currentState?.redo();
+                  // Fallback to old overlay if needed
                   _annotationOverlayKey.currentState?.redo();
                 }
                 : null,

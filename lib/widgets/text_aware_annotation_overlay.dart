@@ -113,6 +113,8 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
           topRight: q.topRight,
           bottomLeft: q.bottomLeft,
           bottomRight: q.bottomRight,
+          pageIndex: q.pageIndex,
+          text: q.text,
         )).toList(),
         color: annotation.color,
         opacity: annotation.opacity,
@@ -126,6 +128,8 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
           topRight: q.topRight,
           bottomLeft: q.bottomLeft,
           bottomRight: q.bottomRight,
+          pageIndex: q.pageIndex,
+          text: q.text,
         )).toList(),
         color: annotation.color,
         strokeWidth: annotation.strokeWidth,
@@ -144,12 +148,13 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     
     // Restore previous state
     final previousSnapshot = _undoStack.removeLast();
+    
+    // Sync storage with previous state
+    _syncStorageWithState(previousSnapshot);
+    
     setState(() {
       _annotations = previousSnapshot.map((a) => _copyAnnotation(a)).toList();
     });
-    
-    // Reload from storage to sync
-    _reloadAnnotationsFromStorage();
     
     // Notify parent about state changes
     widget.onUndoStateChanged?.call(_undoStack.isNotEmpty);
@@ -167,12 +172,13 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     
     // Restore next state
     final nextSnapshot = _redoStack.removeLast();
+    
+    // Sync storage with next state
+    _syncStorageWithState(nextSnapshot);
+    
     setState(() {
       _annotations = nextSnapshot.map((a) => _copyAnnotation(a)).toList();
     });
-    
-    // Reload from storage to sync
-    _reloadAnnotationsFromStorage();
     
     // Notify parent about state changes
     widget.onUndoStateChanged?.call(true);
@@ -180,29 +186,28 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     widget.onAnnotationsChanged?.call(_annotations);
   }
   
-  /// Reload annotations from storage (used after undo/redo)
-  Future<void> _reloadAnnotationsFromStorage() async {
+  /// Sync storage with a given annotation state
+  Future<void> _syncStorageWithState(List<PDFAnnotation> targetState) async {
     try {
       final storedAnnotations = await _storage.loadAnnotations(widget.pdfPath);
-      // Update storage to match current state
       final storedIds = storedAnnotations.map((a) => a.id).toSet();
-      final currentIds = _annotations.map((a) => a.id).toSet();
+      final targetIds = targetState.map((a) => a.id).toSet();
       
       // Remove annotations that shouldn't be there
       for (var storedId in storedIds) {
-        if (!currentIds.contains(storedId)) {
+        if (!targetIds.contains(storedId)) {
           await _storage.removeAnnotation(widget.pdfPath, storedId);
         }
       }
       
-      // Add annotations that are missing
-      for (var annotation in _annotations) {
+      // Add or update annotations that should be there
+      for (var annotation in targetState) {
         if (!storedIds.contains(annotation.id)) {
           await _storage.addAnnotation(widget.pdfPath, annotation);
         }
       }
     } catch (e) {
-      print('Error reloading annotations from storage: $e');
+      print('Error syncing storage with state: $e');
     }
   }
 
@@ -231,6 +236,9 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
         _annotations = annotations;
         _isLoading = false;
       });
+      // Update undo/redo state after loading
+      widget.onUndoStateChanged?.call(_undoStack.isNotEmpty);
+      widget.onRedoStateChanged?.call(_redoStack.isNotEmpty);
     } catch (e) {
       print('Error loading annotations: $e');
       setState(() => _isLoading = false);
@@ -519,7 +527,8 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     );
     
     // Wrap overlay with gesture detector if tool is selected
-    if (widget.selectedTool != null) {
+    // Note: 'text' tool should allow taps to pass through to PDF viewer for EditText
+    if (widget.selectedTool != null && widget.selectedTool != 'text') {
       overlay = Listener(
         onPointerDown: (event) {
           _onPanStart(DragStartDetails(
@@ -549,7 +558,7 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
         child: overlay,
       );
     } else {
-      // When no tool selected, make overlay ignore pointer events so PDF viewer can scroll
+      // When no tool selected or text tool is selected, make overlay ignore pointer events
       // This allows EditText to work by letting taps pass through to the PDF viewer
       overlay = IgnorePointer(
         child: overlay,

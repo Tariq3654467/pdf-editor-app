@@ -81,6 +81,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Color _selectedColor = Colors.red;
   double _strokeWidth = 3.0;
   final GlobalKey<PDFAnnotationOverlayState> _annotationOverlayKey = GlobalKey<PDFAnnotationOverlayState>();
+  final GlobalKey<TextAwareAnnotationOverlayState> _textAwareOverlayKey = GlobalKey<TextAwareAnnotationOverlayState>();
   bool _canUndo = false;
   bool _canRedo = false;
   

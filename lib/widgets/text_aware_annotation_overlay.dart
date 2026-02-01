@@ -19,6 +19,8 @@ class TextAwareAnnotationOverlay extends StatefulWidget {
   final Color? toolColor;
   final double? strokeWidth;
   final Function(List<PDFAnnotation>)? onAnnotationsChanged;
+  final Function(bool)? onUndoStateChanged;
+  final Function(bool)? onRedoStateChanged;
 
   const TextAwareAnnotationOverlay({
     super.key,
@@ -33,13 +35,15 @@ class TextAwareAnnotationOverlay extends StatefulWidget {
     this.toolColor,
     this.strokeWidth,
     this.onAnnotationsChanged,
+    this.onUndoStateChanged,
+    this.onRedoStateChanged,
   });
 
   @override
-  State<TextAwareAnnotationOverlay> createState() => _TextAwareAnnotationOverlayState();
+  State<TextAwareAnnotationOverlay> createState() => TextAwareAnnotationOverlayState();
 }
 
-class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> {
+class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> {
   final AnnotationStorageService _storage = AnnotationStorageService();
   List<PDFAnnotation> _annotations = [];
   List<Offset> _currentPenPath = [];
@@ -47,15 +51,159 @@ class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay>
   Offset? _selectionEnd;
   bool _isLoading = false;
   
+  // Undo/Redo stacks - store annotation snapshots
+  final List<List<PDFAnnotation>> _undoStack = [];
+  final List<List<PDFAnnotation>> _redoStack = [];
+  
   // Debug logging
   void _debugLog(String message) {
     print('TextAwareAnnotationOverlay: $message');
   }
+  
+  /// Get current annotations list (for external access)
+  List<PDFAnnotation> get annotations => List.unmodifiable(_annotations);
+  
+  /// Check if undo is available
+  bool get canUndo => _undoStack.isNotEmpty;
+  
+  /// Check if redo is available
+  bool get canRedo => _redoStack.isNotEmpty;
 
   @override
   void initState() {
     super.initState();
     _loadAnnotations();
+  }
+  
+  /// Save current state to undo stack before making changes
+  void _saveToUndoStack() {
+    // Create a deep copy of current annotations
+    final snapshot = _annotations.map((a) => _copyAnnotation(a)).toList();
+    _undoStack.add(snapshot);
+    
+    // Limit undo stack size to prevent memory issues
+    if (_undoStack.length > 50) {
+      _undoStack.removeAt(0);
+    }
+    
+    // Clear redo stack when new action is performed
+    _redoStack.clear();
+    
+    // Notify parent about state changes
+    widget.onUndoStateChanged?.call(_undoStack.isNotEmpty);
+    widget.onRedoStateChanged?.call(false);
+  }
+  
+  /// Create a deep copy of an annotation
+  PDFAnnotation _copyAnnotation(PDFAnnotation annotation) {
+    if (annotation is PenAnnotation) {
+      return PenAnnotation(
+        id: annotation.id,
+        pageIndex: annotation.pageIndex,
+        points: List.from(annotation.points),
+        color: annotation.color,
+        strokeWidth: annotation.strokeWidth,
+      );
+    } else if (annotation is HighlightAnnotation) {
+      return HighlightAnnotation(
+        id: annotation.id,
+        pageIndex: annotation.pageIndex,
+        quads: annotation.quads.map((q) => TextQuad(
+          topLeft: q.topLeft,
+          topRight: q.topRight,
+          bottomLeft: q.bottomLeft,
+          bottomRight: q.bottomRight,
+        )).toList(),
+        color: annotation.color,
+        opacity: annotation.opacity,
+      );
+    } else if (annotation is UnderlineAnnotation) {
+      return UnderlineAnnotation(
+        id: annotation.id,
+        pageIndex: annotation.pageIndex,
+        quads: annotation.quads.map((q) => TextQuad(
+          topLeft: q.topLeft,
+          topRight: q.topRight,
+          bottomLeft: q.bottomLeft,
+          bottomRight: q.bottomRight,
+        )).toList(),
+        color: annotation.color,
+        strokeWidth: annotation.strokeWidth,
+      );
+    }
+    return annotation;
+  }
+  
+  /// Undo last action
+  void undo() {
+    if (_undoStack.isEmpty) return;
+    
+    // Save current state to redo stack
+    final currentSnapshot = _annotations.map((a) => _copyAnnotation(a)).toList();
+    _redoStack.add(currentSnapshot);
+    
+    // Restore previous state
+    final previousSnapshot = _undoStack.removeLast();
+    setState(() {
+      _annotations = previousSnapshot.map((a) => _copyAnnotation(a)).toList();
+    });
+    
+    // Reload from storage to sync
+    _reloadAnnotationsFromStorage();
+    
+    // Notify parent about state changes
+    widget.onUndoStateChanged?.call(_undoStack.isNotEmpty);
+    widget.onRedoStateChanged?.call(_redoStack.isNotEmpty);
+    widget.onAnnotationsChanged?.call(_annotations);
+  }
+  
+  /// Redo last undone action
+  void redo() {
+    if (_redoStack.isEmpty) return;
+    
+    // Save current state to undo stack
+    final currentSnapshot = _annotations.map((a) => _copyAnnotation(a)).toList();
+    _undoStack.add(currentSnapshot);
+    
+    // Restore next state
+    final nextSnapshot = _redoStack.removeLast();
+    setState(() {
+      _annotations = nextSnapshot.map((a) => _copyAnnotation(a)).toList();
+    });
+    
+    // Reload from storage to sync
+    _reloadAnnotationsFromStorage();
+    
+    // Notify parent about state changes
+    widget.onUndoStateChanged?.call(true);
+    widget.onRedoStateChanged?.call(_redoStack.isNotEmpty);
+    widget.onAnnotationsChanged?.call(_annotations);
+  }
+  
+  /// Reload annotations from storage (used after undo/redo)
+  Future<void> _reloadAnnotationsFromStorage() async {
+    try {
+      final storedAnnotations = await _storage.loadAnnotations(widget.pdfPath);
+      // Update storage to match current state
+      final storedIds = storedAnnotations.map((a) => a.id).toSet();
+      final currentIds = _annotations.map((a) => a.id).toSet();
+      
+      // Remove annotations that shouldn't be there
+      for (var storedId in storedIds) {
+        if (!currentIds.contains(storedId)) {
+          await _storage.removeAnnotation(widget.pdfPath, storedId);
+        }
+      }
+      
+      // Add annotations that are missing
+      for (var annotation in _annotations) {
+        if (!storedIds.contains(annotation.id)) {
+          await _storage.addAnnotation(widget.pdfPath, annotation);
+        }
+      }
+    } catch (e) {
+      print('Error reloading annotations from storage: $e');
+    }
   }
 
   @override
@@ -205,6 +353,9 @@ class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay>
   Future<void> _savePenAnnotation() async {
     if (_currentPenPath.length < 2) return;
 
+    // Save state to undo stack before adding annotation
+    _saveToUndoStack();
+
     final annotation = PenAnnotation(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       pageIndex: widget.currentPage,
@@ -267,6 +418,9 @@ class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay>
         );
       }
 
+      // Save state to undo stack before adding annotation
+      _saveToUndoStack();
+
       await _storage.addAnnotation(widget.pdfPath, annotation);
       setState(() {
         _annotations.add(annotation);
@@ -316,6 +470,9 @@ class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay>
     }
 
     if (erasedIds.isNotEmpty) {
+      // Save state to undo stack before erasing
+      _saveToUndoStack();
+      
       _debugLog('Erasing ${erasedIds.length} annotation(s)');
       setState(() {
         _annotations.removeWhere((a) => erasedIds.contains(a.id));
@@ -393,6 +550,7 @@ class _TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay>
       );
     } else {
       // When no tool selected, make overlay ignore pointer events so PDF viewer can scroll
+      // This allows EditText to work by letting taps pass through to the PDF viewer
       overlay = IgnorePointer(
         child: overlay,
       );

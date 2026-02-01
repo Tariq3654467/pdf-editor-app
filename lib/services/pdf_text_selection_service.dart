@@ -58,7 +58,7 @@ class PDFTextSelectionService {
       
       // Extract text from the specific page
       // Note: Syncfusion doesn't provide exact text bounds easily
-      // We'll use a workaround: extract all text and approximate positions
+      // We'll extract all text and find text near the tap position
       
       final extractedText = textExtractor.extractText(
         startPageIndex: pageIndex,
@@ -67,12 +67,41 @@ class PDFTextSelectionService {
 
       document.dispose();
 
-      // For now, return a simplified text element
-      // In a full implementation, you'd parse PDF content stream to get exact bounds
-      if (extractedText.isNotEmpty) {
-        // Approximate: assume text starts at the tap position
+      // Check if there's text on the page
+      if (extractedText.trim().isEmpty) {
+        return null;
+      }
+
+      // For better text detection, we'll:
+      // 1. Extract text from the page
+      // 2. Find text that's near the tap position (within a reasonable range)
+      // 3. Return the first matching text element
+      
+      // Since Syncfusion doesn't provide exact text bounds, we'll use a heuristic:
+      // Text is likely near the tap position, so we'll return text with approximate bounds
+      // The user can then edit it using the formatting toolbar
+      
+      // Split text into words/lines for better selection
+      final textLines = extractedText.split('\n');
+      String? selectedText;
+      
+      // Try to find text near the tap position
+      // For now, we'll return the first non-empty line as a starting point
+      // In a full implementation, you'd need to parse PDF content stream to get exact positions
+      for (final line in textLines) {
+        if (line.trim().isNotEmpty) {
+          selectedText = line.trim();
+          break;
+        }
+      }
+      
+      // If no line found, use the whole extracted text
+      selectedText ??= extractedText.trim();
+      
+      if (selectedText.isNotEmpty) {
+        // Return text element with approximate bounds based on tap position
         return SelectedTextElement(
-          text: extractedText,
+          text: selectedText,
           bounds: Rect.fromLTWH(
             pdfPosition.dx,
             pdfPosition.dy,

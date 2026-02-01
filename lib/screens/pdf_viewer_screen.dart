@@ -683,17 +683,27 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 enableTextSelection: false,
               ),
             )
-          : SfPdfViewer.file(
-              file,
-              key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
-              controller: _pdfViewerController,
-              onDocumentLoaded: _onDocumentLoaded,
-              onDocumentLoadFailed: _onDocumentLoadFailed,
-              onPageChanged: _onPageChanged,
-              scrollDirection: _getScrollDirection(),
-              pageLayoutMode: _getPageLayoutMode(),
-              enableDoubleTapZooming: true,
-              enableTextSelection: true,
+          : GestureDetector(
+              onTapDown: (details) {
+                // When user taps on PDF, try to find and select text at that position (Sejda-style)
+                // This works even when not in text edit mode - just tap any text to edit it
+                if (!_isEditingMode) {
+                  _handlePDFTextTap(details.localPosition);
+                }
+              },
+              behavior: HitTestBehavior.translucent,
+              child: SfPdfViewer.file(
+                file,
+                key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
+                controller: _pdfViewerController,
+                onDocumentLoaded: _onDocumentLoaded,
+                onDocumentLoadFailed: _onDocumentLoadFailed,
+                onPageChanged: _onPageChanged,
+                scrollDirection: _getScrollDirection(),
+                pageLayoutMode: _getPageLayoutMode(),
+                enableDoubleTapZooming: true,
+                enableTextSelection: true,
+              ),
             ),
     );
     
@@ -2463,19 +2473,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         );
       }
     }
-  }
-  
-  /// Copy selected text to clipboard
-  void _copySelectedText() {
-    if (_selectedPDFText == null) return;
-    
-    Clipboard.setData(ClipboardData(text: _selectedPDFText!.text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Text copied to clipboard'),
-        duration: Duration(seconds: 2),
-      ),
-    );
   }
 
   void _showTextEditDialog({

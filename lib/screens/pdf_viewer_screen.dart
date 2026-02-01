@@ -94,6 +94,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   // Text selection state (Sejda-style - select existing text to edit)
   SelectedPDFText? _selectedPDFText;
   String? _selectedPDFTextObjectId; // MuPDF object ID for text replacement
+  
+  // Cache for text detection to avoid repeated lookups
+  final Map<String, dynamic> _textDetectionCache = {};
+  static const int _maxCacheSize = 50; // Limit cache size
   Offset? _textSelectionToolbarPosition;
   bool _showTextFormattingToolbar = false;
   bool _isScannedDocument = false; // Track if PDF is scanned (image-based)
@@ -164,6 +168,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     _hidePageIndicatorTimer?.cancel();
     _scrollCheckTimer?.cancel();
     _pdfReloadDebounceTimer?.cancel();
+    _textPreviewDebounceTimer?.cancel();
+    _formattingDebounceTimer?.cancel();
     _stopScrollCheckTimer();
     
     // Reset orientation to allow all orientations when leaving the screen
@@ -1113,7 +1119,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   fontFamily: _selectedPDFText!.fontFamily,
                   fontSize: _selectedPDFText!.fontSize,
                   textColor: _selectedPDFText!.color,
-                  onTextChanged: (newText) => _updateTextContent(newText), // Inline text editing
+                  onTextChanged: (newText) => _updateTextContentPreview(newText), // Update preview only
                   onBoldChanged: (isBold) => _applyTextFormatting(isBold: isBold),
                   onItalicChanged: (isItalic) => _applyTextFormatting(isItalic: isItalic),
                   onFontChanged: (font) => _applyTextFormatting(fontFamily: font),
@@ -1129,9 +1135,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   onClose: () {
                     _closeTextToolbar();
                   },
-                  onDone: () {
-                    _closeTextToolbar();
+                  onDone: () async {
+                    // Save text to PDF when user clicks "Done"
+                    await _saveTextContent();
+                    if (mounted) {
+                      _closeTextToolbarAfterSave();
+                    }
                   },
+                  isLoading: _isSavingText, // Show loading state
                 ),
               ),
             ),
@@ -2707,35 +2718,76 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
   
-  /// Update text content (inline editing - Sejda-style)
-  Future<void> _updateTextContent(String newText) async {
-    if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
+  // Debounce timer for text preview updates
+  Timer? _textPreviewDebounceTimer;
+  
+  /// Update text content preview (UI only - doesn't save to PDF)
+  /// Text is only saved when user clicks "Done"
+  /// Optimized with debouncing to reduce setState calls
+  void _updateTextContentPreview(String newText) {
+    if (_selectedPDFText == null) return;
     
-    // Update UI immediately (Sejda-style immediate feedback)
+    // Cancel previous debounce timer
+    _textPreviewDebounceTimer?.cancel();
+    
+    // Debounce UI updates to reduce setState calls (improves performance)
+    _textPreviewDebounceTimer = Timer(const Duration(milliseconds: 50), () {
+      if (mounted && _selectedPDFText != null) {
+        setState(() {
+          _selectedPDFText = _selectedPDFText!.copyWith(text: newText);
+        });
+      }
+    });
+  }
+  
+  // Loading state for text save operation
+  bool _isSavingText = false;
+  
+  /// Save text content to PDF (called when user clicks "Done")
+  /// Optimized with immediate UI feedback and async save
+  Future<void> _saveTextContent() async {
+    if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
+    if (_isSavingText) return; // Prevent multiple simultaneous saves
+    
+    // Cancel any pending preview updates
+    _textPreviewDebounceTimer?.cancel();
+    
+    // Show loading indicator immediately
     setState(() {
-      _selectedPDFText = _selectedPDFText!.copyWith(text: newText);
+      _isSavingText = true;
     });
     
-    // Save to PDF in background (non-blocking)
-    _saveTextChangeToPDF(newText);
+    try {
+      // Save the current text to PDF (non-blocking)
+      await _saveTextChangeToPDF(_selectedPDFText!.text);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isSavingText = false;
+        });
+      }
+    }
   }
   
   /// Save text content change to PDF (background operation)
+  /// Optimized with faster reload and better error handling
   Future<void> _saveTextChangeToPDF(String newText) async {
     if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
     
     try {
       final pdfPath = _actualFilePath ?? widget.filePath;
+      final pageIndex = _selectedPDFText!.pageIndex;
       
-      // Try MuPDF first
+      // Try MuPDF first (faster than Syncfusion)
       bool success = await MuPDFEditorService.replaceText(
         pdfPath,
-        _selectedPDFText!.pageIndex,
+        pageIndex,
         _selectedPDFTextObjectId!,
         newText,
       );
       
       if (success) {
+        // Save PDF (optimized - MuPDF is faster)
         await MuPDFEditorService.savePdf(pdfPath);
       } else {
         // Fallback to Syncfusion if MuPDF fails
@@ -2744,22 +2796,37 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       }
       
       if (success) {
-        // Reload PDF after a short delay to show changes (debounced to prevent hangs)
+        // Optimized: Reload faster (reduced from 800ms to 200ms)
+        // Also navigate to the edited page to show changes immediately
         if (mounted) {
           _pdfReloadDebounceTimer?.cancel();
-          _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 800), () {
+          
+          // Navigate to the edited page first (faster visual feedback)
+          if (_pdfViewerController.pageNumber != pageIndex + 1) {
+            _pdfViewerController.jumpToPage(pageIndex + 1);
+          }
+          
+          // Reload PDF after minimal delay
+          _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 200), () {
             if (mounted) {
               setState(() {
                 _pdfReloadKey++; // Force PDF viewer to reload
               });
-              print('PDF reloaded to show text changes');
               
-              // Show success message
+              // Show success message (non-blocking)
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Text updated successfully'),
+                  content: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.white, size: 20),
+                      SizedBox(width: 8),
+                      Text('Text updated'),
+                    ],
+                  ),
                   backgroundColor: Colors.green,
-                  duration: Duration(seconds: 2),
+                  duration: Duration(seconds: 1),
+                  behavior: SnackBarBehavior.floating,
                 ),
               );
             }
@@ -2771,7 +2838,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             const SnackBar(
               content: Text('Failed to update text. Please try again.'),
               backgroundColor: Colors.red,
-              duration: Duration(seconds: 3),
+              duration: Duration(seconds: 2),
             ),
           );
         }
@@ -2783,7 +2850,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           SnackBar(
             content: Text('Error: $e'),
             backgroundColor: Colors.red,
-            duration: const Duration(seconds: 3),
+            duration: const Duration(seconds: 2),
           ),
         );
       }
@@ -2856,30 +2923,42 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
   
-  /// Close text toolbar and reload PDF to show changes
+  /// Close text toolbar (without saving - used when user clicks Close)
   void _closeTextToolbar() {
     // Cancel any pending debounced reloads
     _pdfReloadDebounceTimer?.cancel();
     
-    // Close toolbar immediately
+    // Close toolbar immediately (don't reload PDF since no changes were saved)
+    setState(() {
+      _showTextFormattingToolbar = false;
+      _selectedPDFText = null;
+      _selectedPDFTextObjectId = null;
+    });
+  }
+  
+  /// Close text toolbar and reload PDF to show saved changes
+  /// Optimized: Reload is already handled in _saveTextChangeToPDF
+  void _closeTextToolbarAfterSave() {
+    // Cancel any pending debounced reloads
+    _pdfReloadDebounceTimer?.cancel();
+    _textPreviewDebounceTimer?.cancel();
+    
+    // Close toolbar immediately (reload is handled by save operation)
     setState(() {
       _showTextFormattingToolbar = false;
       _selectedPDFText = null;
       _selectedPDFTextObjectId = null;
     });
     
-    // Force immediate reload to show changes
-    Future.delayed(const Duration(milliseconds: 300), () {
-      if (mounted) {
-        setState(() {
-          _pdfReloadKey++; // Force PDF viewer to reload
-        });
-        print('PDF reloaded after closing toolbar');
-      }
-    });
+    // Note: PDF reload is already scheduled in _saveTextChangeToPDF
+    // No need to reload again here
   }
   
+  // Debounce timer for formatting updates
+  Timer? _formattingDebounceTimer;
+  
   /// Apply text formatting to selected text using MuPDF (Sejda-style: immediate feedback)
+  /// Optimized with debouncing to batch formatting changes
   Future<void> _applyTextFormatting({
     bool? isBold,
     bool? isItalic,
@@ -2902,8 +2981,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       _selectedPDFText = updatedText;
     });
     
-    // Save to PDF in background (non-blocking, no loading dialog)
-    _saveTextFormattingToPDF(updatedText);
+    // Debounce formatting saves to batch multiple changes
+    _formattingDebounceTimer?.cancel();
+    _formattingDebounceTimer = Timer(const Duration(milliseconds: 300), () {
+      // Save to PDF in background (non-blocking, no loading dialog)
+      _saveTextFormattingToPDF(updatedText);
+    });
   }
   
   /// Save text formatting to PDF (background operation)

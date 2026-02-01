@@ -19,6 +19,7 @@ class PDFTextFormattingToolbar extends StatefulWidget {
   final VoidCallback? onLink;
   final VoidCallback? onClose; // Close toolbar
   final VoidCallback? onDone; // Done button - save and close
+  final bool isLoading; // Loading state for save operation
 
   final String? text; // Current text content for editing
   
@@ -30,6 +31,7 @@ class PDFTextFormattingToolbar extends StatefulWidget {
     this.fontSize = 12.0,
     this.textColor = Colors.black,
     this.text,
+    this.isLoading = false,
     this.onBoldChanged,
     this.onItalicChanged,
     this.onFontChanged,
@@ -146,6 +148,10 @@ class _PDFTextFormattingToolbarState extends State<PDFTextFormattingToolbar> {
                 onChanged: (newText) {
                   _lastText = newText;
                   widget.onTextChanged?.call(newText);
+                },
+                onSubmitted: (newText) {
+                  // When user presses "Done" on keyboard, save and close
+                  widget.onDone?.call();
                 },
                 autofocus: keyboardHeight == 0, // Auto-focus only if keyboard not visible
                 maxLines: null,
@@ -370,24 +376,36 @@ class _PDFTextFormattingToolbarState extends State<PDFTextFormattingToolbar> {
                   Container(
                     margin: const EdgeInsets.symmetric(horizontal: 4),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF2196F3),
+                      color: widget.isLoading 
+                          ? Colors.grey 
+                          : const Color(0xFF2196F3),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Material(
                       color: Colors.transparent,
                       child: InkWell(
-                        onTap: widget.onDone,
+                        onTap: widget.isLoading ? null : widget.onDone,
                         borderRadius: BorderRadius.circular(6),
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                           child: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              const Icon(Icons.check, color: Colors.white, size: 20),
+                              if (widget.isLoading)
+                                const SizedBox(
+                                  width: 16,
+                                  height: 16,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                  ),
+                                )
+                              else
+                                const Icon(Icons.check, color: Colors.white, size: 20),
                               const SizedBox(width: 4),
-                              const Text(
-                                'Done',
-                                style: TextStyle(
+                              Text(
+                                widget.isLoading ? 'Saving...' : 'Done',
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontWeight: FontWeight.bold,
                                   fontSize: 14,

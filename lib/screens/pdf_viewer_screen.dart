@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:share_plus/share_plus.dart';
 import 'package:printing/printing.dart';
 import 'package:file_picker/file_picker.dart';
@@ -14,12 +15,10 @@ import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
 import '../services/pdf_text_editor_service.dart';
-import '../services/pdf_content_editor_service.dart';
 import '../services/pdf_cache_service.dart';
 import '../services/theme_service.dart';
 import '../models/pdf_file.dart';
 import '../widgets/pdf_annotation_overlay.dart';
-import '../widgets/pdf_content_editor.dart';
 import '../widgets/in_app_file_picker.dart';
 
 class PDFViewerScreen extends StatefulWidget {
@@ -73,8 +72,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _isTextEditMode = false;
   List<TextAnnotation> _textAnnotations = []; // Instant text overlays (not saved to PDF yet)
   
-  // Content editing state (true PDF content editing)
-  String? _editableCopyPath; // Path to editable copy of PDF
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -946,54 +943,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         bottom: false,
         child: Stack(
           children: [
-            // Show content editor if in content edit mode
-            if (_isContentEditMode && _editableCopyPath != null)
-              PDFContentEditor(
-                filePath: _editableCopyPath!,
-                currentPage: _currentPage,
-                onSave: (savedPath) async {
-                  // Replace original with edited copy
-                  try {
-                    final originalFile = File(_actualFilePath ?? widget.filePath);
-                    final editedFile = File(savedPath);
-                    if (await editedFile.exists()) {
-                      await originalFile.writeAsBytes(await editedFile.readAsBytes());
-                      // Update cache
-                      await PDFCacheService.clearCache();
-                      // Reload PDF
-                      setState(() {
-                        _pdfReloadKey++;
-                        _isContentEditMode = false;
-                        _editableCopyPath = null;
-                      });
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text('PDF saved successfully!'),
-                          backgroundColor: Colors.green,
-                        ),
-                      );
-                    }
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Error saving PDF: $e'),
-                        backgroundColor: Colors.red,
-                      ),
-                    );
-                  }
-                },
-                onCancel: () {
-                  setState(() {
-                    _isContentEditMode = false;
-                    // Optionally delete editable copy
-                    if (_editableCopyPath != null) {
-                      File(_editableCopyPath!).delete();
-                      _editableCopyPath = null;
-                    }
-                  });
-                },
-              )
-            else
             // PDF Viewer with annotation overlay
             PDFAnnotationOverlay(
             key: _annotationOverlayKey,
@@ -1254,38 +1203,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 ),
               );
             },
-          ),
-          // Content Edit mode (True PDF content editing - Sejda-style)
-          _buildToolButton(
-            icon: Icons.edit_document,
-            label: 'Content Edit',
-            isSelected: _isContentEditMode,
-            onTap: () async {
-              // Create editable copy if not exists
-              if (_editableCopyPath == null) {
-                final copyPath = await PDFContentEditorService.createEditableCopy(_actualFilePath ?? widget.filePath);
-                if (copyPath != null) {
-                  setState(() {
-                    _editableCopyPath = copyPath;
-                    _isContentEditMode = true;
-                    _isEditingMode = false; // Exit annotation mode
-                  });
-                } else {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Error creating editable copy'),
-                      backgroundColor: Colors.red,
-                    ),
-                  );
-                }
-              } else {
-                setState(() {
-                  _isContentEditMode = true;
-                  _isEditingMode = false; // Exit annotation mode
-                });
-              }
-            },
-            color: Colors.orange,
           ),
           // Done button
           _buildToolButton(
@@ -2126,47 +2043,126 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Future<void> _handleTextEditTap(Offset position) async {
     if (!_isTextEditMode || _selectedTool != 'text') return;
     
-    // First check if user tapped on an existing text overlay
-    final screenSize = MediaQuery.of(context).size;
-    final tappedText = _textAnnotations.firstWhere(
-      (textAnnotation) {
-        if (textAnnotation.pageNumber != _currentPage) return false;
-        final screenX = textAnnotation.position.dx * screenSize.width;
-        final screenY = textAnnotation.documentY != null
-            ? textAnnotation.documentY! - _pdfScrollOffset
-            : textAnnotation.position.dy * screenSize.height;
-        
-        // Check if tap is within text bounds (approximate - text width based on length)
-        final textWidth = textAnnotation.text.length * textAnnotation.fontSize * 0.6;
-        final textHeight = textAnnotation.fontSize;
-        final textRect = Rect.fromLTWH(
-          screenX - 5,
-          screenY - 5,
-          textWidth + 10,
-          textHeight + 10,
-        );
-        return textRect.contains(position);
-      },
-      orElse: () => TextAnnotation(
-        text: '',
-        position: Offset.zero,
-        color: Colors.black,
-        pageNumber: -1,
-      ),
-    );
-    
-    if (tappedText.pageNumber == _currentPage && tappedText.text.isNotEmpty) {
-      // Edit existing text overlay
-      _editTextAnnotation(tappedText);
-      return;
-    }
-    
-    // No existing text found - add new text at tap position
+    // Simple: Just show dialog to add text at tap position
+    // True PDF editing - text will be added directly to PDF content
     _showTextEditDialog(
       initialText: '',
       position: position,
       isEditing: false,
     );
+  }
+  
+  Future<void> _addTextToPDF(String text, Offset screenPosition) async {
+    if (text.isEmpty) return;
+    
+    try {
+      // Show loading
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+      
+      // Get PDF page size and convert screen position to PDF coordinates
+      final file = File(_actualFilePath ?? widget.filePath);
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+      
+      if (_currentPage - 1 >= 0 && _currentPage - 1 < document.pages.count) {
+        final page = document.pages[_currentPage - 1];
+        final pageSize = page.size;
+        final screenSize = MediaQuery.of(context).size;
+        
+        // Account for scroll offset when converting coordinates
+        // screenPosition is relative to visible area, need to add scroll offset
+        final absoluteScreenY = screenPosition.dy + _pdfScrollOffset;
+        
+        // Get the PDF viewer's actual rendered size (may be different from screen size)
+        // For vertical scrolling, we need to calculate which part of the document is visible
+        // Simplified: assume PDF is rendered to fit screen width, height scales proportionally
+        final pdfAspectRatio = pageSize.height / pageSize.width;
+        final renderedPdfHeight = screenSize.width * pdfAspectRatio;
+        
+        // Calculate which part of the PDF is visible (for multi-page vertical scroll)
+        // Each page has height = renderedPdfHeight
+        final pageStartY = (_currentPage - 1) * renderedPdfHeight;
+        final relativeY = absoluteScreenY - pageStartY;
+        
+        // Convert to PDF coordinates
+        final pdfX = (screenPosition.dx / screenSize.width) * pageSize.width;
+        final pdfY = (relativeY / renderedPdfHeight) * pageSize.height;
+        
+        // Clamp to page bounds
+        final clampedX = pdfX.clamp(0.0, pageSize.width);
+        final clampedY = pdfY.clamp(0.0, pageSize.height);
+        
+        // Add text to PDF
+        final graphics = page.graphics;
+        final font = sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 12);
+        final brush = sf.PdfSolidBrush(sf.PdfColor(
+          _selectedColor.red,
+          _selectedColor.green,
+          _selectedColor.blue,
+        ));
+        
+        final stringFormat = sf.PdfStringFormat();
+        stringFormat.alignment = sf.PdfTextAlignment.left;
+        stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+        
+        graphics.drawString(
+          text,
+          font,
+          brush: brush,
+          format: stringFormat,
+          bounds: Rect.fromLTWH(
+            clampedX,
+            clampedY,
+            pageSize.width - clampedX,
+            100, // Allow multi-line text
+          ),
+        );
+        
+        // Save PDF
+        final modifiedBytes = await document.save();
+        await file.writeAsBytes(modifiedBytes);
+        document.dispose();
+        
+        // Reload PDF viewer
+        if (mounted) {
+          Navigator.pop(context); // Close loading
+          setState(() {
+            _pdfReloadKey++;
+            _isTextEditMode = false;
+            _selectedTool = 'none';
+          });
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text added to PDF'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      } else {
+        document.dispose();
+        if (mounted) {
+          Navigator.pop(context);
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error adding text: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
   
   void _editTextAnnotation(TextAnnotation textAnnotation) {
@@ -2257,22 +2253,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   });
                 }
               } else {
-                // Add new text annotation instantly (Sejda-style - no PDF save)
-                final normalizedPosition = Offset(
-                  position.dx / MediaQuery.of(context).size.width,
-                  position.dy / MediaQuery.of(context).size.height,
-                );
-                
-                setState(() {
-                  _textAnnotations.add(TextAnnotation(
-                    text: newText,
-                    position: normalizedPosition,
-                    color: _selectedColor,
-                    fontSize: 12.0,
-                    pageNumber: _currentPage,
-                    documentY: position.dy + _pdfScrollOffset,
-                  ));
-                });
+                // Add new text directly to PDF (true content editing)
+                _addTextToPDF(newText, position);
               }
               
               // Reset text edit mode

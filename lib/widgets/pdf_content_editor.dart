@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
+import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import '../services/pdf_content_editor_service.dart';
 import 'dart:io';
+import 'dart:async';
 
 /// Interactive PDF content editor widget (Sejda-style)
 /// Allows true content editing with draggable/resizable elements
@@ -34,11 +36,41 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
   double _selectedFontSize = 12.0;
   final List<Map<String, dynamic>> _undoStack = [];
   final List<Map<String, dynamic>> _redoStack = [];
+  late PdfViewerController _pdfController;
+  Size? _actualPageSize; // Actual PDF page size
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    _pdfController = PdfViewerController();
+    _loadPageDimensions();
     _loadElements();
+  }
+
+  Future<void> _loadPageDimensions() async {
+    try {
+      final file = File(widget.filePath);
+      if (await file.exists()) {
+        final bytes = await file.readAsBytes();
+        final document = sf.PdfDocument(inputBytes: bytes);
+        if (widget.currentPage - 1 >= 0 && widget.currentPage - 1 < document.pages.count) {
+          final page = document.pages[widget.currentPage - 1];
+          setState(() {
+            _actualPageSize = Size(page.size.width, page.size.height);
+            _isLoading = false;
+          });
+        }
+        document.dispose();
+      }
+    } catch (e) {
+      print('Error loading page dimensions: $e');
+      // Fallback to default size
+      setState(() {
+        _actualPageSize = const Size(612, 792);
+        _isLoading = false;
+      });
+    }
   }
 
   Future<void> _loadElements() async {
@@ -54,8 +86,8 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
 
   void _saveState() {
     _undoStack.add({
-      'textElements': _textElements.map((e) => e.id).toList(),
-      'imageElements': _imageElements.map((e) => e.id).toList(),
+      'textElements': _textElements.map((e) => e.toMap()).toList(),
+      'imageElements': _imageElements.map((e) => e.toMap()).toList(),
     });
     _redoStack.clear();
     if (_undoStack.length > 50) {
@@ -66,11 +98,17 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
   void _undo() {
     if (_undoStack.isEmpty) return;
     _redoStack.add({
-      'textElements': _textElements.map((e) => e.id).toList(),
-      'imageElements': _imageElements.map((e) => e.id).toList(),
+      'textElements': _textElements.map((e) => e.toMap()).toList(),
+      'imageElements': _imageElements.map((e) => e.toMap()).toList(),
     });
-    // In a full implementation, restore previous state
+    final previousState = _undoStack.removeLast();
     setState(() {
+      _textElements = (previousState['textElements'] as List)
+          .map((e) => PDFTextElement.fromMap(e))
+          .toList();
+      _imageElements = (previousState['imageElements'] as List)
+          .map((e) => PDFImageElement.fromMap(e))
+          .toList();
       _selectedTextElement = null;
       _selectedImageElement = null;
     });
@@ -79,22 +117,32 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
   void _redo() {
     if (_redoStack.isEmpty) return;
     _undoStack.add({
-      'textElements': _textElements.map((e) => e.id).toList(),
-      'imageElements': _imageElements.map((e) => e.id).toList(),
+      'textElements': _textElements.map((e) => e.toMap()).toList(),
+      'imageElements': _imageElements.map((e) => e.toMap()).toList(),
     });
-    // In a full implementation, restore next state
+    final nextState = _redoStack.removeLast();
     setState(() {
+      _textElements = (nextState['textElements'] as List)
+          .map((e) => PDFTextElement.fromMap(e))
+          .toList();
+      _imageElements = (nextState['imageElements'] as List)
+          .map((e) => PDFImageElement.fromMap(e))
+          .toList();
       _selectedTextElement = null;
       _selectedImageElement = null;
     });
   }
 
-  void _onTextTap(Offset position, Size pageSize) {
+  void _onTextTap(Offset position, Size screenSize) {
+    if (_actualPageSize == null) return;
+    
+    // Convert screen position to PDF coordinates
+    final pdfPosition = _screenToPDF(position, screenSize);
+    
     // Check if tapped on existing text element
     for (var element in _textElements) {
       if (element.pageIndex == widget.currentPage - 1) {
-        final bounds = _convertToScreenBounds(element.bounds, pageSize);
-        if (bounds.contains(position)) {
+        if (element.bounds.contains(pdfPosition)) {
           setState(() {
             _selectedTextElement = element;
             _selectedImageElement = null;
@@ -108,276 +156,305 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
 
     // If not tapped on existing text, add new text
     setState(() {
-      _newTextPosition = position;
+      _newTextPosition = pdfPosition;
       _isAddingText = true;
       _selectedTextElement = null;
       _selectedImageElement = null;
     });
-    _showAddTextDialog(position, pageSize);
+    _showAddTextDialog(pdfPosition, screenSize);
+  }
+
+  Offset _screenToPDF(Offset screenPos, Size screenSize) {
+    if (_actualPageSize == null) return screenPos;
+    // Simplified conversion - in production, account for zoom and scroll
+    return Offset(
+      screenPos.dx * (_actualPageSize!.width / screenSize.width),
+      screenPos.dy * (_actualPageSize!.height / screenSize.height),
+    );
+  }
+
+  Offset _pdfToScreen(Offset pdfPos, Size screenSize) {
+    if (_actualPageSize == null) return pdfPos;
+    return Offset(
+      pdfPos.dx * (screenSize.width / _actualPageSize!.width),
+      pdfPos.dy * (screenSize.height / _actualPageSize!.height),
+    );
   }
 
   void _showTextEditDialog(PDFTextElement element) {
     final controller = TextEditingController(text: element.text);
+    final fontSize = element.fontSize;
+    final color = element.color;
+    
     showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Text'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'Text',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Text'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Font Size: '),
-                Expanded(
-                  child: Slider(
-                    value: element.fontSize,
-                    min: 8,
-                    max: 72,
-                    divisions: 64,
-                    label: '${element.fontSize.toInt()}',
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedFontSize = value;
-                      });
-                    },
+                TextField(
+                  controller: controller,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Text',
+                    border: OutlineInputBorder(),
                   ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('Font Size: '),
+                    Expanded(
+                      child: Slider(
+                        value: fontSize,
+                        min: 8,
+                        max: 72,
+                        divisions: 64,
+                        label: '${fontSize.toInt()}',
+                        onChanged: (value) {
+                          setDialogState(() {});
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    Colors.black,
+                    Colors.red,
+                    Colors.blue,
+                    Colors.green,
+                    Colors.orange,
+                  ].map((c) {
+                    return GestureDetector(
+                      onTap: () {
+                        setDialogState(() {});
+                      },
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: c,
+                          border: Border.all(
+                            color: color == c ? Colors.black : Colors.grey,
+                            width: color == c ? 3 : 1,
+                          ),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    );
+                  }).toList(),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              children: [
-                Colors.black,
-                Colors.red,
-                Colors.blue,
-                Colors.green,
-                Colors.orange,
-              ].map((color) {
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedColor = color;
-                    });
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: color,
-                      border: Border.all(
-                        color: _selectedColor == color ? Colors.black : Colors.grey,
-                        width: _selectedColor == color ? 3 : 1,
-                      ),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                _saveState();
+                final updatedElement = element.copyWith(
+                  text: controller.text,
+                  fontSize: fontSize,
+                  color: color,
                 );
-              }).toList(),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              _saveState();
-              final updatedElement = element.copyWith(
-                text: controller.text,
-                fontSize: _selectedFontSize,
-                color: _selectedColor,
-              );
-              setState(() {
-                final index = _textElements.indexWhere((e) => e.id == element.id);
-                if (index != -1) {
-                  _textElements[index] = updatedElement;
-                }
-                _selectedTextElement = updatedElement;
-              });
-              Navigator.pop(context);
-            },
-            child: const Text('Update'),
-          ),
-          TextButton(
-            onPressed: () {
-              _saveState();
-              setState(() {
-                _textElements.removeWhere((e) => e.id == element.id);
-                _selectedTextElement = null;
-              });
-              Navigator.pop(context);
-            },
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showAddTextDialog(Offset position, Size pageSize) {
-    final controller = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Add Text'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: controller,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                labelText: 'Text',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                const Text('Font Size: '),
-                Expanded(
-                  child: Slider(
-                    value: _selectedFontSize,
-                    min: 8,
-                    max: 72,
-                    divisions: 64,
-                    label: '${_selectedFontSize.toInt()}',
-                    onChanged: (value) {
-                      setState(() {
-                        _selectedFontSize = value;
-                      });
-                    },
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Wrap(
-              spacing: 8,
-              children: [
-                Colors.black,
-                Colors.red,
-                Colors.blue,
-                Colors.green,
-                Colors.orange,
-              ].map((color) {
-                return GestureDetector(
-                  onTap: () {
-                    setState(() {
-                      _selectedColor = color;
-                    });
-                  },
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: color,
-                      border: Border.all(
-                        color: _selectedColor == color ? Colors.black : Colors.grey,
-                        width: _selectedColor == color ? 3 : 1,
-                      ),
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                );
-              }).toList(),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              setState(() {
-                _isAddingText = false;
-                _newTextPosition = null;
-              });
-              Navigator.pop(context);
-            },
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.isEmpty) {
+                setState(() {
+                  final index = _textElements.indexWhere((e) => e.id == element.id);
+                  if (index != -1) {
+                    _textElements[index] = updatedElement;
+                  }
+                  _selectedTextElement = updatedElement;
+                });
                 Navigator.pop(context);
-                return;
-              }
-              _saveState();
-              final pdfBounds = _convertToPDFBounds(
-                Rect.fromLTWH(position.dx, position.dy, 200, 50),
-                pageSize,
-              );
-              final newElement = PDFTextElement(
-                id: 'text_${DateTime.now().millisecondsSinceEpoch}',
-                text: controller.text,
-                bounds: pdfBounds,
-                pageIndex: widget.currentPage - 1,
-                fontSize: _selectedFontSize,
-                color: _selectedColor,
-              );
-              setState(() {
-                _textElements.add(newElement);
-                _isAddingText = false;
-                _newTextPosition = null;
-              });
-              Navigator.pop(context);
-            },
-            child: const Text('Add'),
-          ),
-        ],
+              },
+              child: const Text('Update'),
+            ),
+            TextButton(
+              onPressed: () {
+                _saveState();
+                setState(() {
+                  _textElements.removeWhere((e) => e.id == element.id);
+                  _selectedTextElement = null;
+                });
+                Navigator.pop(context);
+              },
+              style: TextButton.styleFrom(foregroundColor: Colors.red),
+              child: const Text('Delete'),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Rect _convertToScreenBounds(Rect pdfBounds, Size pageSize) {
-    // Convert PDF coordinates to screen coordinates
-    // This is a simplified conversion - actual implementation should account for zoom
-    return Rect.fromLTWH(
-      pdfBounds.left * (pageSize.width / 612), // Assuming default PDF width
-      pdfBounds.top * (pageSize.height / 792), // Assuming default PDF height
-      pdfBounds.width * (pageSize.width / 612),
-      pdfBounds.height * (pageSize.height / 792),
-    );
-  }
-
-  Rect _convertToPDFBounds(Rect screenBounds, Size pageSize) {
-    // Convert screen coordinates to PDF coordinates
-    return Rect.fromLTWH(
-      screenBounds.left * (612 / pageSize.width),
-      screenBounds.top * (792 / pageSize.height),
-      screenBounds.width * (612 / pageSize.width),
-      screenBounds.height * (792 / pageSize.height),
+  void _showAddTextDialog(Offset pdfPosition, Size screenSize) {
+    final controller = TextEditingController();
+    double fontSize = _selectedFontSize;
+    Color color = _selectedColor;
+    
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Add Text'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: controller,
+                  maxLines: 5,
+                  decoration: const InputDecoration(
+                    labelText: 'Text',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    const Text('Font Size: '),
+                    Expanded(
+                      child: Slider(
+                        value: fontSize,
+                        min: 8,
+                        max: 72,
+                        divisions: 64,
+                        label: '${fontSize.toInt()}',
+                        onChanged: (value) {
+                          setDialogState(() {
+                            fontSize = value;
+                          });
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    Colors.black,
+                    Colors.red,
+                    Colors.blue,
+                    Colors.green,
+                    Colors.orange,
+                  ].map((c) {
+                    return GestureDetector(
+                      onTap: () {
+                        setDialogState(() {
+                          color = c;
+                        });
+                      },
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: c,
+                          border: Border.all(
+                            color: color == c ? Colors.black : Colors.grey,
+                            width: color == c ? 3 : 1,
+                          ),
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                setState(() {
+                  _isAddingText = false;
+                  _newTextPosition = null;
+                });
+                Navigator.pop(context);
+              },
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (controller.text.isEmpty) {
+                  Navigator.pop(context);
+                  return;
+                }
+                _saveState();
+                final newElement = PDFTextElement(
+                  id: 'text_${DateTime.now().millisecondsSinceEpoch}',
+                  text: controller.text,
+                  bounds: Rect.fromLTWH(pdfPosition.dx, pdfPosition.dy, 200, 50),
+                  pageIndex: widget.currentPage - 1,
+                  fontSize: fontSize,
+                  color: color,
+                );
+                setState(() {
+                  _textElements.add(newElement);
+                  _isAddingText = false;
+                  _newTextPosition = null;
+                  _selectedFontSize = fontSize;
+                  _selectedColor = color;
+                });
+                Navigator.pop(context);
+              },
+              child: const Text('Add'),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Future<void> _saveEdits() async {
-    final success = await PDFContentEditorService.saveAllEdits(
-      widget.filePath,
-      _textElements,
-      _imageElements,
+    if (!mounted) return;
+    
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(
+        child: CircularProgressIndicator(),
+      ),
     );
 
-    if (success && widget.onSave != null) {
-      widget.onSave!(widget.filePath);
-    } else {
+    try {
+      final success = await PDFContentEditorService.saveAllEdits(
+        widget.filePath,
+        _textElements,
+        _imageElements,
+      );
+
       if (mounted) {
+        Navigator.pop(context); // Close loading
+      }
+
+      if (success && widget.onSave != null) {
+        widget.onSave!(widget.filePath);
+      } else {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Error saving PDF edits'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Error saving PDF edits'),
+          SnackBar(
+            content: Text('Error: $e'),
             backgroundColor: Colors.red,
           ),
         );
@@ -387,6 +464,10 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
 
   @override
   Widget build(BuildContext context) {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    
     final screenSize = MediaQuery.of(context).size;
     
     return Stack(
@@ -394,34 +475,58 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
         // PDF viewer
         SfPdfViewer.file(
           File(widget.filePath),
+          controller: _pdfController,
           initialZoomLevel: 1.0,
+          enableTextSelection: false,
           onDocumentLoadFailed: (details) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error loading PDF: ${details.error}'),
-                backgroundColor: Colors.red,
-              ),
-            );
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Error loading PDF: ${details.error}'),
+                  backgroundColor: Colors.red,
+                ),
+              );
+            }
           },
         ),
-        // Overlay for interactive text elements
-        GestureDetector(
-          onTapDown: (details) {
-            // Convert tap position to page coordinates
-            final pageSize = screenSize;
-            _onTextTap(details.localPosition, pageSize);
-          },
-          child: Container(
-            color: Colors.transparent,
+        // Overlay for interactive text elements - only intercepts taps on text
+        IgnorePointer(
+          ignoring: false,
+          child: GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: (details) {
+              // Only handle taps if not on existing text
+              final pdfPos = _screenToPDF(details.localPosition, screenSize);
+              bool tappedOnText = false;
+              
+              for (var element in _textElements) {
+                if (element.pageIndex == widget.currentPage - 1 &&
+                    element.bounds.contains(pdfPos)) {
+                  tappedOnText = true;
+                  break;
+                }
+              }
+              
+              if (!tappedOnText) {
+                _onTextTap(details.localPosition, screenSize);
+              }
+            },
             child: Stack(
               children: _textElements
                   .where((e) => e.pageIndex == widget.currentPage - 1)
                   .map((element) {
-                    // Convert PDF bounds to screen bounds
-                    final screenBounds = _convertToScreenBounds(element.bounds, screenSize);
+                    final screenPos = _pdfToScreen(
+                      Offset(element.bounds.left, element.bounds.top),
+                      screenSize,
+                    );
+                    final screenSize2 = _pdfToScreen(
+                      Offset(element.bounds.width, element.bounds.height),
+                      screenSize,
+                    );
+                    
                     return Positioned(
-                      left: screenBounds.left,
-                      top: screenBounds.top,
+                      left: screenPos.dx,
+                      top: screenPos.dy,
                       child: GestureDetector(
                         onTap: () {
                           setState(() {
@@ -431,18 +536,18 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
                           _showTextEditDialog(element);
                         },
                         child: Container(
-                          width: screenBounds.width,
-                          height: screenBounds.height,
+                          width: screenSize2.dx,
+                          height: screenSize2.dy,
                           decoration: BoxDecoration(
                             border: _selectedTextElement?.id == element.id
                                 ? Border.all(color: Colors.blue, width: 2)
-                                : Border.all(color: Colors.transparent),
+                                : null,
                             borderRadius: BorderRadius.circular(4),
                           ),
                           child: Text(
                             element.text,
                             style: TextStyle(
-                              fontSize: element.fontSize * (screenSize.width / 612),
+                              fontSize: element.fontSize * (screenSize.width / (_actualPageSize?.width ?? 612)),
                               color: element.color,
                               fontWeight: element.isBold ? FontWeight.bold : FontWeight.normal,
                               fontStyle: element.isItalic ? FontStyle.italic : FontStyle.normal,
@@ -466,42 +571,9 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
     );
   }
 
-  Widget _buildTextElementOverlay(PDFTextElement element) {
-    return Positioned(
-      left: element.bounds.left,
-      top: element.bounds.top,
-      child: GestureDetector(
-        onTap: () {
-          setState(() {
-            _selectedTextElement = element;
-            _selectedImageElement = null;
-          });
-        },
-        child: Container(
-          width: element.bounds.width,
-          height: element.bounds.height,
-          decoration: BoxDecoration(
-            border: _selectedTextElement?.id == element.id
-                ? Border.all(color: Colors.blue, width: 2)
-                : null,
-          ),
-          child: Text(
-            element.text,
-            style: TextStyle(
-              fontSize: element.fontSize,
-              color: element.color,
-              fontWeight: element.isBold ? FontWeight.bold : FontWeight.normal,
-              fontStyle: element.isItalic ? FontStyle.italic : FontStyle.normal,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildToolbar() {
     return Container(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white,
         boxShadow: [
@@ -512,47 +584,68 @@ class _PDFContentEditorState extends State<PDFContentEditor> {
           ),
         ],
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          IconButton(
-            icon: const Icon(Icons.undo),
-            onPressed: _undoStack.isEmpty ? null : _undo,
-            tooltip: 'Undo',
-          ),
-          IconButton(
-            icon: const Icon(Icons.redo),
-            onPressed: _redoStack.isEmpty ? null : _redo,
-            tooltip: 'Redo',
-          ),
-          IconButton(
-            icon: const Icon(Icons.text_fields),
-            onPressed: () {
-              // Toggle text editing mode
-            },
-            tooltip: 'Add Text',
-          ),
-          IconButton(
-            icon: const Icon(Icons.image),
-            onPressed: () {
-              // Add image
-            },
-            tooltip: 'Add Image',
-          ),
-          ElevatedButton(
-            onPressed: _saveEdits,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.green,
+      child: SafeArea(
+        top: false,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+          children: [
+            IconButton(
+              icon: const Icon(Icons.undo),
+              onPressed: _undoStack.isEmpty ? null : _undo,
+              tooltip: 'Undo',
             ),
-            child: const Text('Save', style: TextStyle(color: Colors.white)),
-          ),
-          TextButton(
-            onPressed: widget.onCancel,
-            child: const Text('Cancel'),
-          ),
-        ],
+            IconButton(
+              icon: const Icon(Icons.redo),
+              onPressed: _redoStack.isEmpty ? null : _redo,
+              tooltip: 'Redo',
+            ),
+            IconButton(
+              icon: const Icon(Icons.text_fields),
+              onPressed: () {
+                // Text tool is always active in content edit mode
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Tap on the PDF to add text'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+              tooltip: 'Add Text',
+            ),
+            IconButton(
+              icon: const Icon(Icons.image),
+              onPressed: () {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Image insertion coming soon'),
+                    duration: Duration(seconds: 2),
+                  ),
+                );
+              },
+              tooltip: 'Add Image',
+            ),
+            ElevatedButton(
+              onPressed: _saveEdits,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.green,
+                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              ),
+              child: const Text('Save', style: TextStyle(color: Colors.white)),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close),
+              onPressed: widget.onCancel,
+              tooltip: 'Cancel',
+            ),
+          ],
+        ),
       ),
     );
   }
-}
 
+  @override
+  void dispose() {
+    _pdfController.dispose();
+    super.dispose();
+  }
+}

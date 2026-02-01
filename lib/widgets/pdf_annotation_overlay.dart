@@ -92,6 +92,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
       final size = renderBox?.size ?? Size.zero;
       
       // Normalize coordinates (0-1 range) relative to overlay size
+      // This ensures annotations stay in the same position relative to the page
       final normalizedPoint = size.width > 0 && size.height > 0
           ? Offset(
               details.localPosition.dx / size.width,
@@ -100,7 +101,8 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
           : Offset.zero;
       
       setState(() {
-        // Store absolute document position (screen Y + scroll offset)
+        // Store absolute document position for scroll compensation
+        // documentY = screen position + scroll offset (absolute position in document)
         final documentY = details.localPosition.dy + widget.scrollOffset;
         _currentPath = [
           AnnotationPoint(
@@ -111,7 +113,7 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
             toolType: widget.toolType,
             pageNumber: widget.currentPage,
             normalizedPoint: normalizedPoint,
-            documentY: documentY, // Store absolute position in document
+            documentY: documentY,
           ),
         ];
       });
@@ -336,13 +338,15 @@ class AnnotationPainter extends CustomPainter {
   });
 
   // Convert document coordinates to screen coordinates
-  // documentY is the absolute position in the document
+  // documentY is the absolute position in the document (screenY + scrollOffset when drawn)
   // screenY = documentY - currentScrollOffset
   // If documentY is null (old annotations), use normalized coordinates
   Offset _documentToScreen(Offset normalizedPoint, double? documentY) {
     final screenX = normalizedPoint.dx * overlaySize.width;
+    // Use normalized coordinates primarily, documentY only for scroll compensation
+    // This ensures annotations stay fixed relative to the page content
     final screenY = documentY != null
-        ? documentY - scrollOffset // Convert document position to screen position
+        ? (documentY - scrollOffset).clamp(0.0, overlaySize.height) // Convert document position to screen position
         : normalizedPoint.dy * overlaySize.height; // Fallback for old annotations
     return Offset(screenX, screenY);
   }

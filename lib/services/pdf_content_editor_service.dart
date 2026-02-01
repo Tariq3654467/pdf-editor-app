@@ -413,6 +413,54 @@ class PDFTextElement {
       isItalic: isItalic ?? this.isItalic,
     );
   }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'text': text,
+      'bounds': {
+        'left': bounds.left,
+        'top': bounds.top,
+        'width': bounds.width,
+        'height': bounds.height,
+      },
+      'pageIndex': pageIndex,
+      'fontSize': fontSize,
+      'color': {
+        'r': color.red,
+        'g': color.green,
+        'b': color.blue,
+        'a': color.alpha,
+      },
+      'fontFamily': fontFamily,
+      'isBold': isBold,
+      'isItalic': isItalic,
+    };
+  }
+
+  static PDFTextElement fromMap(Map<String, dynamic> map) {
+    return PDFTextElement(
+      id: map['id'] as String,
+      text: map['text'] as String,
+      bounds: Rect.fromLTWH(
+        (map['bounds'] as Map)['left'] as double,
+        (map['bounds'] as Map)['top'] as double,
+        (map['bounds'] as Map)['width'] as double,
+        (map['bounds'] as Map)['height'] as double,
+      ),
+      pageIndex: map['pageIndex'] as int,
+      fontSize: (map['fontSize'] as num?)?.toDouble() ?? 12.0,
+      color: Color.fromARGB(
+        (map['color'] as Map)['a'] as int? ?? 255,
+        (map['color'] as Map)['r'] as int? ?? 0,
+        (map['color'] as Map)['g'] as int? ?? 0,
+        (map['color'] as Map)['b'] as int? ?? 0,
+      ),
+      fontFamily: map['fontFamily'] as String?,
+      isBold: map['isBold'] as bool? ?? false,
+      isItalic: map['isItalic'] as bool? ?? false,
+    );
+  }
 }
 
 /// Represents an image element in PDF (for editing)
@@ -440,6 +488,34 @@ class PDFImageElement {
       imagePath: imagePath ?? this.imagePath,
       bounds: bounds ?? this.bounds,
       pageIndex: pageIndex ?? this.pageIndex,
+    );
+  }
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'imagePath': imagePath,
+      'bounds': {
+        'left': bounds.left,
+        'top': bounds.top,
+        'width': bounds.width,
+        'height': bounds.height,
+      },
+      'pageIndex': pageIndex,
+    };
+  }
+
+  static PDFImageElement fromMap(Map<String, dynamic> map) {
+    return PDFImageElement(
+      id: map['id'] as String,
+      imagePath: map['imagePath'] as String,
+      bounds: Rect.fromLTWH(
+        (map['bounds'] as Map)['left'] as double,
+        (map['bounds'] as Map)['top'] as double,
+        (map['bounds'] as Map)['width'] as double,
+        (map['bounds'] as Map)['height'] as double,
+      ),
+      pageIndex: map['pageIndex'] as int,
     );
   }
 }

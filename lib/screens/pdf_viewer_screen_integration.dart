@@ -18,54 +18,7 @@ import '../models/pdf_annotation.dart';
 // ============================================================================
 // STEP 2: Add these state variables to _PDFViewerScreenState
 // ============================================================================
-/*
-  // Text-aware annotation system
-  Size? _pdfPageSize; // PDF page size in points
-  double _zoomLevel = 1.0;
-  List<PDFAnnotation> _savedAnnotations = [];
-*/
 
-// ============================================================================
-// STEP 3: Update _onDocumentLoaded to capture page size
-// ============================================================================
-/*
-  void _onDocumentLoaded(PdfDocumentLoadedDetails details) {
-    if (mounted) {
-      setState(() {
-        _totalPages = details.document.pages.count;
-        _isLoading = false;
-        
-        // Get page size for annotation coordinate system
-        if (details.document.pages.count > 0) {
-          final firstPage = details.document.pages[0];
-          _pdfPageSize = Size(firstPage.size.width, firstPage.size.height);
-        }
-      });
-      
-      // Load saved annotations
-      _loadSavedAnnotations();
-    }
-  }
-*/
-
-// ============================================================================
-// STEP 4: Add method to load saved annotations
-// ============================================================================
-/*
-  Future<void> _loadSavedAnnotations() async {
-    try {
-      final storage = AnnotationStorageService();
-      final annotations = await storage.loadAnnotations(_actualFilePath ?? widget.filePath);
-      if (mounted) {
-        setState(() {
-          _savedAnnotations = annotations;
-        });
-      }
-    } catch (e) {
-      print('Error loading annotations: $e');
-    }
-  }
-*/
 
 // ============================================================================
 // STEP 5: Replace PDFAnnotationOverlay with TextAwareAnnotationOverlay

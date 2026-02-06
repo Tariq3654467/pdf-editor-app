@@ -1,6 +1,7 @@
 import 'dart:isolate';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:async';
 import 'dart:ui' as ui;
 import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:flutter/foundation.dart';
@@ -10,6 +11,7 @@ import 'package:path/path.dart' as path;
 import 'package:printing/printing.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
+import 'package:image/image.dart' as img;
 import 'mupdf_editor_service.dart';
 
 /// Service for running heavy PDF operations in isolates to prevent ANR
@@ -27,11 +29,127 @@ class PDFIsolateService {
     return await compute(_savePDFWithAnnotationsIsolate, request);
   }
 
-  /// Render PDF page to image in isolate (for caching)
+  /// Render PDF page to image (using native MuPDF rendering)
+  /// Note: Cannot use isolates because platform channels don't work in isolates
+  /// This runs on the main thread but is async, so it won't block UI
   static Future<Uint8List?> renderPageToImage(
     PDFPageRenderRequest request,
   ) async {
-    return await compute(_renderPageToImageIsolate, request);
+    try {
+      // Validate file exists first
+      final file = File(request.filePath);
+      if (!await file.exists()) {
+        print('PDF file does not exist: ${request.filePath}');
+        return null;
+      }
+      
+      // Get page dimensions first using Syncfusion (lightweight operation)
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        print('PDF file is empty: ${request.filePath}');
+        return null;
+      }
+      
+      final document = sf.PdfDocument(inputBytes: bytes);
+      
+      if (request.pageIndex < 0 || request.pageIndex >= document.pages.count) {
+        print('Invalid page index: ${request.pageIndex}, total pages: ${document.pages.count}');
+        document.dispose();
+        return null;
+      }
+      
+      final page = document.pages[request.pageIndex];
+      final pageSize = page.size;
+      final thumbWidth = (pageSize.width * request.scale).round();
+      final thumbHeight = (pageSize.height * request.scale).round();
+      document.dispose();
+      
+      if (thumbWidth <= 0 || thumbHeight <= 0) {
+        print('Invalid thumbnail dimensions: ${thumbWidth}x${thumbHeight}');
+        return null;
+      }
+      
+      // Use native MuPDF rendering via platform channel
+      // This returns raw RGB data
+      final rawRgbData = await MuPDFEditorService.renderPageToImage(
+        request.filePath,
+        request.pageIndex,
+        request.scale,
+      );
+      
+      if (rawRgbData == null || rawRgbData.isEmpty) {
+        print('Native rendering returned null or empty for page ${request.pageIndex}');
+        return null;
+      }
+      
+      // Convert raw RGB data to PNG using image package
+      // The native code returns RGB data (3 bytes per pixel)
+      final imageDataSize = thumbWidth * thumbHeight * 3;
+      
+      // Handle case where native code might return slightly different size (due to stride/padding)
+      if (rawRgbData.length < imageDataSize) {
+        print('Invalid RGB data size: expected at least $imageDataSize, got ${rawRgbData.length} for page ${request.pageIndex}');
+        // Try to use what we have if it's close (within 10%)
+        if (rawRgbData.length >= (imageDataSize * 0.9).round()) {
+          print('Using partial RGB data (${rawRgbData.length} bytes)');
+          // Calculate actual dimensions from data
+          final actualPixels = rawRgbData.length ~/ 3;
+          final actualHeight = (actualPixels / thumbWidth).round();
+          if (actualHeight > 0 && actualHeight <= thumbHeight * 1.1) {
+            // Use actual dimensions
+            final image = img.Image(
+              width: thumbWidth,
+              height: actualHeight,
+            );
+            
+            int srcIndex = 0;
+            final maxPixels = (thumbWidth * actualHeight).clamp(0, actualPixels);
+            for (int y = 0; y < actualHeight && srcIndex < rawRgbData.length - 2; y++) {
+              for (int x = 0; x < thumbWidth && srcIndex < rawRgbData.length - 2; x++) {
+                final r = rawRgbData[srcIndex++];
+                final g = rawRgbData[srcIndex++];
+                final b = rawRgbData[srcIndex++];
+                image.setPixelRgba(x, y, r, g, b, 255);
+              }
+            }
+            
+            final pngBytes = img.encodePng(image);
+            return Uint8List.fromList(pngBytes);
+          }
+        }
+        return null;
+      }
+      
+      // Create image from RGB data
+      final image = img.Image(
+        width: thumbWidth,
+        height: thumbHeight,
+      );
+      
+      // Copy RGB data to image
+      int srcIndex = 0;
+      for (int y = 0; y < thumbHeight; y++) {
+        for (int x = 0; x < thumbWidth; x++) {
+          if (srcIndex + 2 < rawRgbData.length) {
+            final r = rawRgbData[srcIndex++];
+            final g = rawRgbData[srcIndex++];
+            final b = rawRgbData[srcIndex++];
+            image.setPixelRgba(x, y, r, g, b, 255);
+          } else {
+            break;
+          }
+        }
+      }
+      
+      // Encode to PNG
+      final pngBytes = img.encodePng(image);
+      return Uint8List.fromList(pngBytes);
+      
+    } catch (e, stackTrace) {
+      print('Error rendering page ${request.pageIndex} to image: $e');
+      print('Stack trace: $stackTrace');
+      return null;
+    }
   }
 
   /// Parse PDF document in isolate
@@ -106,6 +224,7 @@ Future<PDFDocumentInfo> _loadPDFInfoIsolate(String filePath) async {
   try {
     final file = File(filePath);
     if (!await file.exists()) {
+      print('_loadPDFInfoIsolate: File does not exist: $filePath');
       return PDFDocumentInfo(
         pageCount: 0,
         fileSize: 0,
@@ -114,25 +233,84 @@ Future<PDFDocumentInfo> _loadPDFInfoIsolate(String filePath) async {
       );
     }
 
+    final stat = await file.stat();
+    if (stat.size == 0) {
+      print('_loadPDFInfoIsolate: File is empty: $filePath');
+      return PDFDocumentInfo(
+        pageCount: 0,
+        fileSize: 0,
+        isValid: false,
+        error: 'File is empty',
+      );
+    }
+
     final bytes = await file.readAsBytes();
-    final document = sf.PdfDocument(inputBytes: bytes);
-    
-    final pageCount = document.pages.count;
-    final fileSize = bytes.length;
-    
-    document.dispose();
-    
-    return PDFDocumentInfo(
-      pageCount: pageCount,
-      fileSize: fileSize,
-      isValid: true,
-    );
-  } catch (e) {
+    if (bytes.isEmpty) {
+      print('_loadPDFInfoIsolate: Read bytes are empty: $filePath');
+      return PDFDocumentInfo(
+        pageCount: 0,
+        fileSize: 0,
+        isValid: false,
+        error: 'File is empty',
+      );
+    }
+
+    // Validate PDF header
+    if (bytes.length < 4 || 
+        String.fromCharCodes(bytes.take(4)) != '%PDF') {
+      print('_loadPDFInfoIsolate: Invalid PDF header: $filePath');
+      return PDFDocumentInfo(
+        pageCount: 0,
+        fileSize: bytes.length,
+        isValid: false,
+        error: 'Invalid PDF file (missing PDF header)',
+      );
+    }
+
+    sf.PdfDocument? document;
+    try {
+      document = sf.PdfDocument(inputBytes: bytes);
+      final pageCount = document.pages.count;
+      
+      if (pageCount <= 0) {
+        print('_loadPDFInfoIsolate: PDF has no pages: $filePath');
+        document.dispose();
+        return PDFDocumentInfo(
+          pageCount: 0,
+          fileSize: bytes.length,
+          isValid: false,
+          error: 'PDF has no pages',
+        );
+      }
+
+      final fileSize = bytes.length;
+      document.dispose();
+      document = null;
+
+      print('_loadPDFInfoIsolate: Successfully loaded PDF: $filePath, pages: $pageCount');
+      return PDFDocumentInfo(
+        pageCount: pageCount,
+        fileSize: fileSize,
+        isValid: true,
+      );
+    } catch (e) {
+      document?.dispose();
+      print('_loadPDFInfoIsolate: Error parsing PDF document: $e');
+      return PDFDocumentInfo(
+        pageCount: 0,
+        fileSize: bytes.length,
+        isValid: false,
+        error: 'Error parsing PDF: $e',
+      );
+    }
+  } catch (e, stackTrace) {
+    print('_loadPDFInfoIsolate: Unexpected error: $e');
+    print('Stack trace: $stackTrace');
     return PDFDocumentInfo(
       pageCount: 0,
       fileSize: 0,
       isValid: false,
-      error: e.toString(),
+      error: 'Unexpected error: $e',
     );
   }
 }
@@ -164,18 +342,89 @@ Future<PDFSaveResult> _savePDFWithAnnotationsIsolate(
 }
 
 /// Isolate function: Render PDF page to image
-/// Note: The printing package doesn't support rendering PDFs to images
-/// For now, return null to show placeholders
-/// To implement real thumbnails, consider using pdfium_bindings or pdfx package
 /// Must be top-level (not static) for compute() to work
 Future<Uint8List?> _renderPageToImageIsolate(
   PDFPageRenderRequest request,
 ) async {
-  // TODO: Implement PDF page rendering to images
-  // The printing package is for printing, not rendering to images
-  // Consider using pdfium_bindings or pdfx package for this functionality
-  // For now, return null to show lightweight placeholders
-  return null;
+  try {
+    final file = File(request.filePath);
+    if (!await file.exists()) {
+      print('PDF file does not exist: ${request.filePath}');
+      return null;
+    }
+
+    final bytes = await file.readAsBytes();
+    final document = sf.PdfDocument(inputBytes: bytes);
+    
+    if (request.pageIndex < 0 || request.pageIndex >= document.pages.count) {
+      document.dispose();
+      print('Invalid page index: ${request.pageIndex}, total pages: ${document.pages.count}');
+      return null;
+    }
+
+    final page = document.pages[request.pageIndex];
+    final pageSize = page.size;
+    
+    // Calculate thumbnail dimensions based on scale
+    final thumbnailWidth = (pageSize.width * request.scale).round();
+    final thumbnailHeight = (pageSize.height * request.scale).round();
+    
+    // Note: Printing.raster doesn't work well in isolates and PdfRaster API is limited
+    // For now, we'll use a workaround: create a single-page PDF and use Printing.raster
+    // outside the isolate, or return null to show placeholders
+    // TODO: Implement proper PDF page rendering using pdfx or native rendering
+    
+    // Create a temporary PDF with just this page for rendering
+    final tempPdf = sf.PdfDocument();
+    final tempPage = tempPdf.pages.add();
+    final pageTemplate = page.createTemplate();
+    tempPage.graphics.drawPdfTemplate(
+      pageTemplate,
+      const ui.Offset(0, 0),
+      ui.Size(pageSize.width, pageSize.height),
+    );
+    
+    final tempPdfBytesList = await tempPdf.save();
+    final tempPdfBytes = Uint8List.fromList(tempPdfBytesList);
+    tempPdf.dispose();
+    document.dispose();
+    
+    // Try using Printing.raster - note: this may not work in isolates
+    // If it fails, we'll return null and show placeholders
+    try {
+      final imageStream = Printing.raster(
+        tempPdfBytes,
+        pages: [0],
+        dpi: (72 * request.scale).toDouble(),
+      );
+      
+      // Get the first PdfRaster from the stream
+      final pdfRaster = await imageStream.first.timeout(
+        const Duration(seconds: 10),
+        onTimeout: () {
+          print('Timeout rendering page ${request.pageIndex}');
+          throw TimeoutException('Rendering timeout');
+        },
+      );
+      
+      // PdfRaster should have properties to access the image
+      // Check if it has a toPng() method or similar
+      // For now, return null to show placeholders until we find the correct API
+      print('PdfRaster received for page ${request.pageIndex}, but conversion not implemented yet');
+      return null;
+      
+      // TODO: Find correct way to convert PdfRaster to Uint8List
+      // The printing package's PdfRaster might need to be converted differently
+    } catch (e) {
+      print('Error using printing.raster for page ${request.pageIndex}: $e');
+      // Return null to show placeholder - this is acceptable for now
+      return null;
+    }
+  } catch (e, stackTrace) {
+    print('Error rendering PDF page ${request.pageIndex} to image: $e');
+    print('Stack trace: $stackTrace');
+    return null;
+  }
 }
 
 /// Isolate function: Parse PDF document

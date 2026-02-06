@@ -12,6 +12,8 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path/path.dart' as path;
 import 'dart:io';
 import 'dart:async';
+import 'dart:convert';
+import 'dart:math' as math;
 import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
@@ -712,46 +714,31 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     final file = File(filePath);
     
     // Wrap PDF viewer in RepaintBoundary to prevent full-screen repaints
+    // Use LayoutBuilder so we get the ACTUAL PDF viewer size (not full screen)
     final pdfViewer = RepaintBoundary(
-      child: _isTextEditMode && _selectedTool == 'text'
-          ? GestureDetector(
-              // Sejda-style: Click text to edit inline (NO DIALOG)
-              // Use same handler as normal mode - toolbar appears automatically
-              onTapDown: (details) => _handlePDFTextTap(details.localPosition),
-              behavior: HitTestBehavior.translucent,
-              child: SfPdfViewer.file(
-                file,
-                key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
-                controller: _pdfViewerController,
-                onDocumentLoaded: _onDocumentLoaded,
-                onDocumentLoadFailed: _onDocumentLoadFailed,
-                onPageChanged: _onPageChanged,
-                scrollDirection: _getScrollDirection(),
-                pageLayoutMode: _getPageLayoutMode(),
-                enableDoubleTapZooming: true,
-                enableTextSelection: false,
-              ),
-            )
-          : GestureDetector(
-              onTapDown: (details) {
-                // Sejda-style: Click text to edit, click empty space to add text
-                // Always try to detect text first (works in any mode)
-                _handlePDFTextTap(details.localPosition);
-              },
-              behavior: HitTestBehavior.translucent,
-              child: SfPdfViewer.file(
-                file,
-                key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
-                controller: _pdfViewerController,
-                onDocumentLoaded: _onDocumentLoaded,
-                onDocumentLoadFailed: _onDocumentLoadFailed,
-                onPageChanged: _onPageChanged,
-                scrollDirection: _getScrollDirection(),
-                pageLayoutMode: _getPageLayoutMode(),
-                enableDoubleTapZooming: true,
-                enableTextSelection: true,
-              ),
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final viewerSize = constraints.biggest;
+          
+          // Inline text editing is disabled; we still wrap in GestureDetector to keep
+          // the structure, but we don't intercept taps for text editing anymore.
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            child: SfPdfViewer.file(
+              file,
+              key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
+              controller: _pdfViewerController,
+              onDocumentLoaded: _onDocumentLoaded,
+              onDocumentLoadFailed: _onDocumentLoadFailed,
+              onPageChanged: _onPageChanged,
+              scrollDirection: _getScrollDirection(),
+              pageLayoutMode: _getPageLayoutMode(),
+              enableDoubleTapZooming: true,
+              enableTextSelection: true,
             ),
+          );
+        },
+      ),
     );
     
     return pdfViewer;
@@ -1363,24 +1350,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               });
             },
           ),
-          // Text tool (Sejda-style: click to edit existing text or add new)
-          _buildToolButton(
-            icon: Icons.text_fields,
-            label: 'Text',
-            isSelected: _selectedTool == 'text',
-            onTap: () {
-              setState(() {
-                _selectedTool = 'text';
-                _isTextEditMode = true;
-              });
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Tap on text to edit it, or tap on empty space to add new text'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-          ),
           // Done button
           _buildToolButton(
             icon: Icons.check,
@@ -1914,12 +1883,15 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         );
         
         if (mounted) {
+          // Small delay to ensure cache is fully updated before showing message
+          await Future.delayed(const Duration(milliseconds: 100));
+          
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'PDF split successfully! Created ${splitFiles.length} page file(s). Files are saved in app storage.',
+                'PDF split successfully! ${splitFiles.length} file(s) saved automatically. Files are available in Recent and App Files.',
               ),
-              duration: const Duration(seconds: 3),
+              duration: const Duration(seconds: 4),
             ),
           );
           
@@ -2235,7 +2207,15 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Future<void> _handleTextEditTap(Offset position) async {
-    if (!_isTextEditMode || _selectedTool != 'text') return;
+    // Allow text editing even if text tool wasn't explicitly selected
+    // This makes it more intuitive - just tap on text to edit
+    if (!_isTextEditMode && _selectedTool != 'text') {
+      // Auto-enable text mode when user taps (more intuitive)
+      setState(() {
+        _selectedTool = 'text';
+        _isTextEditMode = true;
+      });
+    }
     
     // Don't allow text editing on scanned documents
     if (_isScannedDocument) {
@@ -2252,7 +2232,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     // Sejda-style: Try to find existing text first
     // If text found → toolbar appears automatically (NO DIALOG)
     // If no text found → just show hint, NO DIALOG
-    await _handlePDFTextTap(position);
+    // Use full screen size here as an approximation of viewer size
+    await _handlePDFTextTap(position, MediaQuery.of(context).size);
     
     // Sejda-style: NO DIALOG when clicking on text or empty space
     // The toolbar handles all editing inline
@@ -2596,7 +2577,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
   
   /// Handle tap on PDF to detect and select text (Sejda-style) using MuPDF
-  Future<void> _handlePDFTextTap(Offset screenPosition) async {
+  ///
+  /// IMPORTANT:
+  /// - [screenPosition] is in the same coordinate space as the PDF viewer /
+  ///   text-aware overlay (top-left origin, already includes zoom).
+  /// - Coordinate conversion MUST match `_screenToPdf` in
+  ///   `text_aware_annotation_overlay.dart` so taps, highlights, and
+  ///   editing all hit the same text.
+  Future<void> _handlePDFTextTap(Offset screenPosition, Size viewerSize) async {
     // Don't allow text editing on scanned documents
     if (_isScannedDocument) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2610,101 +2598,176 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
     
     try {
-      // Convert screen position to PDF coordinates
       final file = File(_actualFilePath ?? widget.filePath);
       final bytes = await file.readAsBytes();
       final document = sf.PdfDocument(inputBytes: bytes);
       
-      if (_currentPage - 1 >= 0 && _currentPage - 1 < document.pages.count) {
-        final page = document.pages[_currentPage - 1];
-        final pageSize = page.size;
-        final screenSize = MediaQuery.of(context).size;
-        
-        // Calculate rendered PDF dimensions
-        final pdfAspectRatio = pageSize.height / pageSize.width;
-        final renderedPdfWidth = screenSize.width;
-        final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
-        
-        // Account for scroll
-        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
-        final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
-        final pageStartY = pageIndex * renderedPdfHeight;
-        final relativeYInPage = absoluteDocumentY - pageStartY;
-        
-        // Convert to PDF coordinates (points, not pixels)
-        final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
-        final pdfY = (relativeYInPage / renderedPdfHeight) * pageSize.height;
-        
+      if (document.pages.count == 0) {
         document.dispose();
+        return;
+      }
+      
+      // Convert screen position to PDF coordinates
+      // This logic is intentionally kept IDENTICAL to _screenToPdf() in
+      // text_aware_annotation_overlay.dart so all tools agree.
+
+      // Use PDF page size (all pages assumed same size for scaling)
+      final firstPage = document.pages[0];
+      final pageSize = firstPage.size;
+
+      // Use viewerSize (actual PDF viewer widget size) for scaling
+      // This matches the coordinate system of details.localPosition
+      final screenSize = viewerSize;
+
+      // Rendered PDF dimensions (scaled to fit viewer width)
+      final pdfAspectRatio = pageSize.height / pageSize.width;
+      final renderedPdfWidth = screenSize.width;
+      final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+
+      // 1) Absolute Y in document space (includes scroll)
+      final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
+
+      // 2) Page index from absolute Y (continuous vertical layout)
+      int tappedPageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
+      tappedPageIndex = tappedPageIndex.clamp(0, document.pages.count - 1);
+
+      // 3) Y relative to that page
+      final pageStartY = tappedPageIndex * renderedPdfHeight;
+      final relativeYInPage = absoluteDocumentY - pageStartY;
+
+      // 4) Convert to PDF page coordinates (points)
+      // PDF uses bottom-left origin where Y=0 is at bottom, Y increases upward
+      // MuPDF text coordinates are in this native system
+      final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
+      
+      // Convert screen Y to PDF Y (both measured from bottom)
+      // Screen: Y=0 at top, Y=renderedHeight at bottom
+      // PDF: Y=0 at bottom, Y=pageHeight at top
+      // Screen Y from top = relativeYInPage
+      // Screen Y from bottom = renderedPdfHeight - relativeYInPage
+      // PDF Y from bottom = (screen Y from bottom / renderedPdfHeight) * pageSize.height
+      final screenYFromBottom = renderedPdfHeight - relativeYInPage;
+      final pdfY = (screenYFromBottom / renderedPdfHeight) * pageSize.height;
+      
+      final pdfTapPoint = Offset(pdfX, pdfY);
+      
+      // DEBUG: Log coordinate conversion values
+      print('PDFTextTap DEBUG: screenPosition=(${screenPosition.dx}, ${screenPosition.dy}), '
+          'scrollOffset=$_pdfScrollOffset, '
+          'absoluteDocumentY=$absoluteDocumentY, '
+          'renderedPdfHeight=$renderedPdfHeight, '
+          'tappedPageIndex=$tappedPageIndex, '
+          'pageStartY=$pageStartY, '
+          'relativeYInPage=$relativeYInPage, '
+          'screenYFromBottom=$screenYFromBottom, '
+          'pdfY=$pdfY, '
+          'pageSize.height=${pageSize.height}, '
+          'pdfTapPoint=($pdfX, $pdfY)');
+
+      // Keep document alive while we use pageSize for tolerance calculations
+
+      // Use MuPDF to get word quads at this position (same pipeline as highlight)
+      final pdfPath = _actualFilePath ?? widget.filePath;
+      final wordQuad = await _hitTestWordQuadAt(
+        pdfPath: pdfPath,
+        pageIndex: tappedPageIndex,
+        pdfTapPoint: pdfTapPoint,
+        pageSize: Size(pageSize.width, pageSize.height),
+        renderedPdfWidth: renderedPdfWidth,
+        renderedPdfHeight: renderedPdfHeight,
+      );
+
+      document.dispose();
+
+      if (wordQuad == null || wordQuad.text == null || wordQuad.text!.isEmpty) {
+        // No word found at this position
+        print('PDFTextTap: No word found at position ($screenPosition)');
         
-        // Use MuPDF to detect text at this position
-        final pdfPath = _actualFilePath ?? widget.filePath;
-        final textObject = await MuPDFEditorService.getTextAt(
-          pdfPath,
-          _currentPage - 1,
-          pdfX,
-          pdfY,
-        );
-        
-        if (textObject != null) {
-          // Text found - show formatting toolbar
-          setState(() {
-            _selectedPDFText = SelectedPDFText(
-              text: textObject.text,
-              bounds: Rect.fromLTWH(
-                textObject.x,
-                textObject.y,
-                textObject.width,
-                textObject.height,
-              ),
-              pageIndex: textObject.pageIndex,
-              position: Offset(textObject.x, textObject.y),
-              fontSize: textObject.fontSize,
-              color: Colors.black, // Default, will be updated when formatting is applied
-              fontFamily: textObject.fontName,
-              isBold: false, // Default, will be updated when formatting is applied
-              isItalic: false, // Default, will be updated when formatting is applied
-            );
-            // Store objectId for later replacement
-            _selectedPDFTextObjectId = textObject.objectId;
-            // Position toolbar above the selected text (Sejda-style: near but not blocking)
-            final screenSize = MediaQuery.of(context).size;
-            _textSelectionToolbarPosition = Offset(
-              (screenPosition.dx - 150).clamp(16.0, screenSize.width - 320), // Keep toolbar on screen
-              (screenPosition.dy - 100).clamp(16.0, screenSize.height - 200), // Above tap, but visible
-            );
-            _showTextFormattingToolbar = true;
-            
-            // Show visual feedback (Sejda-style: brief highlight)
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: const Row(
-                  children: [
-                    Icon(Icons.edit, color: Colors.white, size: 18),
-                    SizedBox(width: 8),
-                    Text('Text selected - Edit inline in toolbar'),
-                  ],
-                ),
-                backgroundColor: const Color(0xFF2196F3),
-                duration: const Duration(seconds: 2),
-                behavior: SnackBarBehavior.floating,
-                margin: const EdgeInsets.only(bottom: 16, left: 16, right: 16),
-              ),
-            );
-          });
-        } else {
-          // No text found at tap position - allow adding new text (Sejda-style)
+        // Only clear selection if text tool is active, otherwise allow other tools to work
+        if (_selectedTool == 'text' || _isTextEditMode) {
           setState(() {
             _selectedPDFText = null;
             _selectedPDFTextObjectId = null;
             _showTextFormattingToolbar = false;
           });
           
-          // Sejda-style: No dialog when clicking empty space
-          // Just silently allow user to enable text tool if they want to add text
-          // The dialog should NEVER appear when clicking on text
+          // Show helpful message if text tool is active but no text found
+          if (_selectedTool == 'text') {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('No text found at this position. Tap on text to edit it.'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
         }
+        return;
       }
+      
+      // Validate that we have an objectId (required for text replacement)
+      if (wordQuad.objectId == null || wordQuad.objectId!.isEmpty) {
+        print('PDFTextTap: Warning - Text found but no objectId available. Text editing may not work correctly.');
+        // Still show toolbar but warn user
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Text found but editing may be limited. Try using full document editing instead.'),
+            duration: Duration(seconds: 3),
+            backgroundColor: Colors.orange,
+          ),
+        );
+      }
+
+      print('PDFTextTap: Found word "${wordQuad.text}" at page ${wordQuad.pageIndex}');
+
+      // Text and objectId come directly from the MuPDF quad extraction.
+      // This is the SINGLE source of truth for selection; no second lookup.
+      final bounds = wordQuad.bounds;
+
+      setState(() {
+        // Automatically enable text mode when text is found (even if text tool wasn't selected)
+        _selectedTool = 'text';
+        _isTextEditMode = true;
+        _isEditingMode = true;
+        
+        _selectedPDFText = SelectedPDFText(
+          text: wordQuad.text!,
+          bounds: bounds,
+          pageIndex: wordQuad.pageIndex,
+          position: bounds.topLeft,
+          // Use sensible defaults for formatting; actual formatting updates
+          // come from the toolbar and are applied via replaceText.
+          fontSize: 12.0,
+          color: Colors.black,
+          fontFamily: null,
+          isBold: false,
+          isItalic: false,
+        );
+        // Store MuPDF objectId for later replacement
+        _selectedPDFTextObjectId = wordQuad.objectId;
+        // Position toolbar above the selected text (Sejda-style: near but not blocking)
+        final screenSize = MediaQuery.of(context).size;
+        _textSelectionToolbarPosition = Offset(
+          (screenPosition.dx - 150).clamp(16.0, screenSize.width - 320), // Keep toolbar on screen
+          (screenPosition.dy - 100).clamp(16.0, screenSize.height - 200), // Above tap, but visible
+        );
+        _showTextFormattingToolbar = true;
+        // Show visual feedback (Sejda-style: brief highlight)
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Row(
+              children: [
+                Icon(Icons.edit, color: Colors.white, size: 18),
+                SizedBox(width: 8),
+                Text('Text selected - Edit inline in toolbar'),
+              ],
+            ),
+            backgroundColor: const Color(0xFF2196F3),
+            duration: const Duration(seconds: 2),
+            behavior: SnackBarBehavior.floating,
+            margin: const EdgeInsets.only(bottom: 16, left: 16, right: 16),
+          ),
+        );
+      });
     } catch (e) {
       print('Error handling PDF text tap: $e');
       if (mounted) {
@@ -2715,6 +2778,136 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           ),
         );
       }
+    }
+  }
+
+  /// Shared word hit-test using MuPDF text quads (same pipeline as highlight)
+  ///
+  /// - [pdfTapPoint] is in PDF coordinates (page space, bottom-left origin).
+  /// - Returns the TextQuad whose bounds contain the tap, with a small
+  ///   tolerance equivalent to ~4 screen pixels.
+  Future<TextQuad?> _hitTestWordQuadAt({
+    required String pdfPath,
+    required int pageIndex,
+    required Offset pdfTapPoint,
+    required Size pageSize,
+    required double renderedPdfWidth,
+    required double renderedPdfHeight,
+  }) async {
+    try {
+      // Convert screen pixels into PDF units so we can build a selection
+      // rectangle around the tap point. MuPDF's quad extractor returns quads
+      // that intersect the selection rect, so a zero-area rect (start == end)
+      // often produces 0 quads.
+      // Use a more generous tolerance (15 screen pixels) to improve text selection
+      // accuracy, especially for small text or when coordinates are slightly off.
+      final pdfPixelsPerScreenX = pageSize.width / renderedPdfWidth;
+      final pdfPixelsPerScreenY = pageSize.height / renderedPdfHeight;
+      final tolerancePdfX = 15.0 * pdfPixelsPerScreenX;
+      final tolerancePdfY = 15.0 * pdfPixelsPerScreenY;
+      // Use the larger tolerance to ensure we catch nearby words
+      final tolerance = math.max(tolerancePdfX, tolerancePdfY);
+      // Ensure minimum tolerance of at least 10 PDF units for very small text
+      final minTolerance = 10.0;
+      final finalTolerance = math.max(tolerance, minTolerance);
+
+      final start = Offset(
+        pdfTapPoint.dx - finalTolerance,
+        pdfTapPoint.dy - finalTolerance,
+      );
+      final end = Offset(
+        pdfTapPoint.dx + finalTolerance,
+        pdfTapPoint.dy + finalTolerance,
+      );
+
+      final jsonString = await MuPDFEditorService.getTextQuadsForSelection(
+        pdfPath,
+        pageIndex,
+        start,
+        end,
+      );
+
+      if (jsonString == null || jsonString.isEmpty) {
+        return null;
+      }
+
+      final quadsJson = jsonDecode(jsonString) as List;
+      if (quadsJson.isEmpty) {
+        return null;
+      }
+
+      final quads = quadsJson
+          .map((q) => TextQuad.fromJson(q as Map<String, dynamic>))
+          .toList();
+
+      print('_hitTestWordQuadAt: Found ${quads.length} quads for tap at PDF ($pdfTapPoint)');
+      
+      if (quads.isEmpty) {
+        print('_hitTestWordQuadAt: No quads found, returning null');
+        return null;
+      }
+
+      // Find the best quad: prefer quads that contain the tap point,
+      // and among those, pick the closest one
+      TextQuad? bestContaining;
+      double minContainingDistance = double.infinity;
+      
+      // Use a more generous expansion for checking containment
+      // This helps when coordinates are slightly off due to rounding or scaling
+      final expandedTolerance = finalTolerance * 1.5;
+
+      for (final quad in quads) {
+        final expanded = quad.bounds.inflate(expandedTolerance);
+        if (expanded.contains(pdfTapPoint)) {
+          final distance = (quad.bounds.center - pdfTapPoint).distance;
+          if (bestContaining == null || distance < minContainingDistance) {
+            bestContaining = quad;
+            minContainingDistance = distance;
+          }
+        }
+      }
+
+      // If we found a quad containing the point, use it
+      if (bestContaining != null) {
+        print('_hitTestWordQuadAt: Selected containing quad "${bestContaining.text}"');
+        return bestContaining;
+      }
+
+      // Fallback: use nearest quad by center distance, but only if within reasonable range
+      // This prevents selecting text that's too far from the tap point
+      // Use a more adaptive distance: max of 10% page width or 3x tolerance
+      final maxDistance = math.max(pageSize.width * 0.1, finalTolerance * 3.0);
+      TextQuad? nearest;
+      double minDistance = double.infinity;
+      
+      for (final quad in quads) {
+        final distance = (quad.bounds.center - pdfTapPoint).distance;
+        if (distance < maxDistance && distance < minDistance) {
+          nearest = quad;
+          minDistance = distance;
+        }
+      }
+      
+      if (nearest != null) {
+        print('_hitTestWordQuadAt: Selected nearest quad "${nearest.text}" (distance: ${minDistance.toStringAsFixed(2)})');
+        return nearest;
+      }
+      
+      // Last resort: if no quad is within reasonable distance, return the absolute nearest
+      if (quads.isNotEmpty) {
+        final absoluteNearest = quads.reduce((a, b) {
+          final da = (a.bounds.center - pdfTapPoint).distance;
+          final db = (b.bounds.center - pdfTapPoint).distance;
+          return da <= db ? a : b;
+        });
+        print('_hitTestWordQuadAt: Selected absolute nearest quad "${absoluteNearest.text}" (last resort)');
+        return absoluteNearest;
+      }
+      
+      return null;
+    } catch (e) {
+      print('Error in _hitTestWordQuadAt: $e');
+      return null;
     }
   }
   
@@ -2772,11 +2965,34 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   /// Save text content change to PDF (background operation)
   /// Optimized with faster reload and better error handling
   Future<void> _saveTextChangeToPDF(String newText) async {
-    if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
+    if (_selectedPDFText == null) {
+      print('_saveTextChangeToPDF: No text selected');
+      return;
+    }
+    
+    if (_selectedPDFTextObjectId == null || _selectedPDFTextObjectId!.isEmpty) {
+      print('_saveTextChangeToPDF: No objectId available, using Syncfusion fallback');
+      // Try Syncfusion fallback if no objectId
+      final success = await _replaceTextWithSyncfusion(newText);
+      if (!success) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Text editing failed. This PDF may not support inline editing. Try using "Extract All Text" for full document editing.'),
+              backgroundColor: Colors.orange,
+              duration: Duration(seconds: 4),
+            ),
+          );
+        }
+      }
+      return;
+    }
     
     try {
       final pdfPath = _actualFilePath ?? widget.filePath;
       final pageIndex = _selectedPDFText!.pageIndex;
+      
+      print('_saveTextChangeToPDF: Attempting to replace text with objectId: ${_selectedPDFTextObjectId}');
       
       // Try MuPDF first (faster than Syncfusion)
       bool success = await MuPDFEditorService.replaceText(
@@ -2787,11 +3003,15 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       );
       
       if (success) {
+        print('_saveTextChangeToPDF: MuPDF replacement successful, saving PDF');
         // Save PDF (optimized - MuPDF is faster)
-        await MuPDFEditorService.savePdf(pdfPath);
+        final saveSuccess = await MuPDFEditorService.savePdf(pdfPath);
+        if (!saveSuccess) {
+          print('_saveTextChangeToPDF: Warning - MuPDF save returned false');
+        }
       } else {
         // Fallback to Syncfusion if MuPDF fails
-        print('MuPDF text replacement failed, trying Syncfusion fallback');
+        print('_saveTextChangeToPDF: MuPDF text replacement failed, trying Syncfusion fallback');
         success = await _replaceTextWithSyncfusion(newText);
       }
       

@@ -343,3 +343,52 @@ class PrintPainter extends CustomPainter {
   bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }
 
+// Edit PDF Text Icon - Document with text lines and edit cursor
+class EditPDFTextPainter extends CustomPainter {
+  final Color color;
+
+  EditPDFTextPainter({required this.color});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    // Draw document
+    final docRect = Rect.fromLTWH(15, 20, 50, 60);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(docRect, const Radius.circular(4)),
+      paint..color = Colors.white,
+    );
+
+    // Draw text lines
+    final textPaint = Paint()
+      ..color = color
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+    
+    // Three horizontal lines representing text
+    canvas.drawLine(Offset(20, 35), Offset(55, 35), textPaint);
+    canvas.drawLine(Offset(20, 45), Offset(55, 45), textPaint);
+    canvas.drawLine(Offset(20, 55), Offset(50, 55), textPaint);
+
+    // Draw edit cursor (vertical line with caret)
+    final cursorPaint = Paint()
+      ..color = color
+      ..strokeWidth = 2.5
+      ..style = PaintingStyle.stroke;
+    canvas.drawLine(Offset(50, 50), Offset(50, 60), cursorPaint);
+    // Draw caret (small triangle)
+    final caretPath = Path()
+      ..moveTo(50, 50)
+      ..lineTo(47, 53)
+      ..lineTo(53, 53)
+      ..close();
+    canvas.drawPath(caretPath, paint..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}
+

@@ -322,6 +322,19 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     final pdfPoint = _screenToPdf(details.localPosition);
 
     if (widget.selectedTool == 'pen') {
+      // Prevent adding duplicate or very close points to avoid vertical lines
+      if (_currentPenPath.isNotEmpty) {
+        final lastPoint = _currentPenPath.last;
+        final dx = (pdfPoint.dx - lastPoint.dx).abs();
+        final dy = (pdfPoint.dy - lastPoint.dy).abs();
+        final distance = (pdfPoint - lastPoint).distance;
+        
+        // Only add point if it's at least 0.5 points away (prevents vertical line artifacts)
+        // Also check if movement is primarily vertical (which could cause unwanted vertical lines)
+        if (distance < 0.5 || (dx < 0.1 && dy > 1.0)) {
+          return;
+        }
+      }
       setState(() {
         _currentPenPath.add(pdfPoint);
       });

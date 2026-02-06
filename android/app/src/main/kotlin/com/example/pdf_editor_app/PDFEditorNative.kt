@@ -170,5 +170,18 @@ class PDFEditorNative {
         endX: Float,
         endY: Float
     ): String
+    
+    /**
+     * Render PDF page to image bytes (PNG format)
+     * @param pdfPath Path to PDF file
+     * @param pageIndex Page number (0-based)
+     * @param scale Scale factor for thumbnail (0.0-1.0)
+     * @return ByteArray containing PNG image bytes, or null if failed
+     */
+    external fun renderPageToImage(
+        pdfPath: String,
+        pageIndex: Int,
+        scale: Float
+    ): ByteArray?
 }
 

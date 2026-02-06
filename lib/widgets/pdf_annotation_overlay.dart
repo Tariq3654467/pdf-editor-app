@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 
 // Text annotation for instant text overlay (Sejda-style)
 class TextAnnotation {
@@ -57,6 +58,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
   final Function(TextAnnotation)? onTextTap; // Callback when text is tapped
   final Function(List<AnnotationPoint>)? onAnnotationComplete; // Callback when annotation is completed (to save to PDF)
   final String? pdfPath; // PDF file path for saving annotations
+  final Size? pageSize; // PDF page size for proper coordinate conversion
+  final PdfPageLayoutMode? pageLayoutMode; // Page layout mode (single vs continuous)
 
   const PDFAnnotationOverlay({
     super.key,
@@ -75,6 +78,8 @@ class PDFAnnotationOverlay extends StatefulWidget {
     this.onTextTap,
     this.onAnnotationComplete,
     this.pdfPath,
+    this.pageSize,
+    this.pageLayoutMode,
   });
 
   @override
@@ -233,21 +238,87 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
       return Container();
     }
 
+    // Get screen size for coordinate conversion
+    final screenSize = MediaQuery.of(context).size;
+    
+    // Calculate PDF page dimensions if pageSize is provided
+    Size? pdfPageSize = widget.pageSize;
+    double renderedPdfWidth = overlaySize.width;
+    double renderedPdfHeight = overlaySize.height;
+    
+    if (pdfPageSize != null && pdfPageSize.width > 0) {
+      // PDF is scaled to fit screen width, height scales proportionally
+      final pdfAspectRatio = pdfPageSize.height / pdfPageSize.width;
+      renderedPdfWidth = screenSize.width;
+      renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    }
+
     return Stack(
       children: widget.textAnnotations!
           .where((textAnnotation) => textAnnotation.pageNumber == widget.currentPage)
           .map((textAnnotation) {
-        // Convert normalized position to screen coordinates
-        final screenX = textAnnotation.position.dx * overlaySize.width;
-        final screenY = textAnnotation.documentY != null
-            ? textAnnotation.documentY! - widget.scrollOffset
-            : textAnnotation.position.dy * overlaySize.height;
+        // DEBUG: Log annotation info
+        print('[ANNOTATION_DEBUG] TextAnnotation: id=${textAnnotation.id}, page=${textAnnotation.pageNumber}, '
+            'position=${textAnnotation.position}, documentY=${textAnnotation.documentY}');
+        
+        Offset screenPosition;
+        
+        if (textAnnotation.documentY != null && pdfPageSize != null) {
+          // Use documentY (absolute document coordinate) - need to convert properly
+          // documentY is absolute Y in document space (all pages stacked vertically)
+          final absoluteDocumentY = textAnnotation.documentY!;
+          
+          // Calculate which page this annotation is on
+          final annotationPageIndex = textAnnotation.pageNumber - 1; // Convert to 0-based
+          final pageStartY = annotationPageIndex * renderedPdfHeight;
+          final relativeYInPage = absoluteDocumentY - pageStartY;
+          
+          // Convert to screen coordinates
+          // X: normalized position maps to rendered PDF width
+          final screenX = textAnnotation.position.dx * renderedPdfWidth;
+          
+          // Y: account for page offset and scroll
+          // In continuous mode, pages are stacked vertically
+          final screenY = pageStartY + relativeYInPage - widget.scrollOffset;
+          
+          screenPosition = Offset(screenX, screenY);
+          
+          print('[ANNOTATION_DEBUG] Using documentY: absoluteY=$absoluteDocumentY, '
+              'pageIndex=$annotationPageIndex, pageStartY=$pageStartY, '
+              'relativeY=$relativeYInPage, screenY=$screenY, scrollOffset=${widget.scrollOffset}');
+        } else {
+          // Fallback: use normalized position (0-1 range)
+          // This assumes overlaySize represents the visible PDF area
+          final screenX = textAnnotation.position.dx * overlaySize.width;
+          final screenY = textAnnotation.position.dy * overlaySize.height;
+          screenPosition = Offset(screenX, screenY);
+          
+          print('[ANNOTATION_DEBUG] Using normalized position: screenX=$screenX, screenY=$screenY');
+        }
+
+        // Calculate text bounds for hit-testing
+        final textPainter = TextPainter(
+          text: TextSpan(
+            text: textAnnotation.text,
+            style: TextStyle(
+              fontSize: textAnnotation.fontSize,
+            ),
+          ),
+          textDirection: TextDirection.ltr,
+        );
+        textPainter.layout();
+        final textBounds = Rect.fromLTWH(
+          screenPosition.dx,
+          screenPosition.dy,
+          textPainter.width,
+          textPainter.height,
+        );
 
         return Positioned(
-          left: screenX,
-          top: screenY,
-          child: GestureDetector(
-            onTap: () => widget.onTextTap?.call(textAnnotation),
+          left: screenPosition.dx,
+          top: screenPosition.dy,
+          child: IgnorePointer(
+            // Individual text widgets don't handle taps - global handler does hit-testing
             child: Text(
               textAnnotation.text,
               style: TextStyle(
@@ -293,18 +364,31 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
     );
 
     // When drawing, wrap with GestureDetector to capture drawing gestures
-    final overlayWidget = widget.isDrawing
-        ? GestureDetector(
-            onPanStart: _onPanStart,
-            onPanUpdate: _onPanUpdate,
-            onPanEnd: _onPanEnd,
-            behavior: HitTestBehavior.opaque,
-            child: annotationPainter,
-          )
-        : IgnorePointer(
-            ignoring: true, // Ignore all touches - let them pass through to PDF viewer
-            child: annotationPainter, // Still visible but doesn't block scrolling
-          );
+    // When not drawing but text annotations exist, add tap handler for proper hit-testing
+    Widget overlayWidget;
+    if (widget.isDrawing) {
+      overlayWidget = GestureDetector(
+        onPanStart: _onPanStart,
+        onPanUpdate: _onPanUpdate,
+        onPanEnd: _onPanEnd,
+        behavior: HitTestBehavior.opaque,
+        child: annotationPainter,
+      );
+    } else if (hasTextAnnotations && widget.onTextTap != null) {
+      // Add global tap handler for proper annotation hit-testing
+      // Use the full screen size as the overlay size for coordinate conversion
+      final overlaySize = MediaQuery.of(context).size;
+      overlayWidget = GestureDetector(
+        onTapDown: (details) => _handleGlobalTap(details, overlaySize),
+        behavior: HitTestBehavior.translucent,
+        child: annotationPainter,
+      );
+    } else {
+      overlayWidget = IgnorePointer(
+        ignoring: true, // Ignore all touches - let them pass through to PDF viewer
+        child: annotationPainter, // Still visible but doesn't block scrolling
+      );
+    }
 
     // The overlay is positioned on top of the PDF viewer
     // Annotations are stored with normalized coordinates (0-1) relative to overlay size
@@ -322,6 +406,87 @@ class PDFAnnotationOverlayState extends State<PDFAnnotationOverlay> {
   }
 
   List<List<AnnotationPoint>> get annotations => _paths;
+  
+  /// Handle global tap for proper annotation hit-testing
+  /// Finds the top-most annotation that contains the tap point
+  void _handleGlobalTap(TapDownDetails details, Size overlaySize) {
+    if (widget.textAnnotations == null || widget.textAnnotations!.isEmpty || widget.onTextTap == null) {
+      return;
+    }
+    
+    final tapPoint = details.localPosition;
+    print('[ANNOTATION_DEBUG] Global tap at: $tapPoint');
+    
+    // Get screen size for coordinate conversion
+    final screenSize = MediaQuery.of(context).size;
+    
+    // Calculate PDF page dimensions if pageSize is provided
+    Size? pdfPageSize = widget.pageSize;
+    double renderedPdfWidth = overlaySize.width;
+    double renderedPdfHeight = overlaySize.height;
+    
+    if (pdfPageSize != null && pdfPageSize.width > 0) {
+      final pdfAspectRatio = pdfPageSize.height / pdfPageSize.width;
+      renderedPdfWidth = screenSize.width;
+      renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    }
+    
+    // Find all annotations that contain the tap point (reverse order to get top-most first)
+    final candidates = <TextAnnotation>[];
+    
+    for (var textAnnotation in widget.textAnnotations!) {
+      if (textAnnotation.pageNumber != widget.currentPage) continue;
+      
+      Offset screenPosition;
+      
+      if (textAnnotation.documentY != null && pdfPageSize != null) {
+        final absoluteDocumentY = textAnnotation.documentY!;
+        final annotationPageIndex = textAnnotation.pageNumber - 1;
+        final pageStartY = annotationPageIndex * renderedPdfHeight;
+        final relativeYInPage = absoluteDocumentY - pageStartY;
+        final screenX = textAnnotation.position.dx * renderedPdfWidth;
+        final screenY = pageStartY + relativeYInPage - widget.scrollOffset;
+        screenPosition = Offset(screenX, screenY);
+      } else {
+        final screenX = textAnnotation.position.dx * overlaySize.width;
+        final screenY = textAnnotation.position.dy * overlaySize.height;
+        screenPosition = Offset(screenX, screenY);
+      }
+      
+      // Calculate text bounds
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: textAnnotation.text,
+          style: TextStyle(fontSize: textAnnotation.fontSize),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      final textBounds = Rect.fromLTWH(
+        screenPosition.dx,
+        screenPosition.dy,
+        textPainter.width,
+        textPainter.height,
+      );
+      
+      // Check if tap is within bounds (with tolerance)
+      final tolerance = 10.0;
+      final expandedBounds = textBounds.inflate(tolerance);
+      if (expandedBounds.contains(tapPoint)) {
+        print('[ANNOTATION_DEBUG] Found candidate: id=${textAnnotation.id}, bounds=$textBounds');
+        candidates.add(textAnnotation);
+      }
+    }
+    
+    // Select the top-most annotation (last in list, or could sort by Z-order)
+    if (candidates.isNotEmpty) {
+      final selected = candidates.last; // Top-most (last added/rendered)
+      print('[ANNOTATION_DEBUG] Selected annotation: id=${selected.id} from ${candidates.length} candidates');
+      widget.onTextTap?.call(selected);
+    } else {
+      print('[ANNOTATION_DEBUG] No annotation found at tap point: $tapPoint');
+    }
+  }
 }
 
 class AnnotationPainter extends CustomPainter {

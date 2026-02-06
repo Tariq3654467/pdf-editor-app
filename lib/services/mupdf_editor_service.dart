@@ -285,5 +285,29 @@ class MuPDFEditorService {
       return null;
     }
   }
+  
+  /// Render PDF page to image bytes (PNG format)
+  /// 
+  /// @param pdfPath Path to PDF file
+  /// @param pageIndex Page number (0-based)
+  /// @param scale Scale factor for thumbnail (0.0-1.0, e.g., 0.3 for 30% size)
+  /// @return Uint8List containing PNG image bytes, or null if failed
+  static Future<Uint8List?> renderPageToImage(
+    String pdfPath,
+    int pageIndex,
+    double scale,
+  ) async {
+    try {
+      final result = await _channel.invokeMethod<Uint8List>('renderPageToImage', {
+        'path': pdfPath,
+        'pageIndex': pageIndex,
+        'scale': scale,
+      });
+      return result;
+    } catch (e) {
+      print('Error rendering page to image: $e');
+      return null;
+    }
+  }
 }
 

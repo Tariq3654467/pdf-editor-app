@@ -10,6 +10,7 @@ import 'pdf_viewer_screen.dart';
 import '../widgets/in_app_file_picker.dart';
 import 'dart:io';
 import 'package:path/path.dart' as path;
+import 'package:flutter/services.dart';
 
 class MergePDFScreen extends StatefulWidget {
   const MergePDFScreen({super.key});
@@ -223,35 +224,117 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
     if (selectedFiles != null && selectedFiles.isNotEmpty) {
       // Load PDF info for selected files
       final List<PDFFile> newPDFs = [];
+      int failedCount = 0;
+      
       for (final filePath in selectedFiles) {
         try {
-          final file = File(filePath);
-          if (await file.exists()) {
-            final stat = await file.stat();
-            final pdf = PDFFile(
-              name: path.basename(filePath),
-              date: PDFService.formatDate(stat.modified),
-              size: PDFService.formatFileSize(stat.size),
-              filePath: filePath,
-              isFavorite: false,
-              dateModified: stat.modified,
-              fileSizeBytes: stat.size,
-            );
-            newPDFs.add(pdf);
+          if (filePath == null || filePath.isEmpty) {
+            failedCount++;
+            continue;
           }
-        } catch (e) {
-          print('Error loading PDF info: $e');
+          
+          // Handle content URIs - convert to actual file path first
+          String actualFilePath = filePath;
+          if (filePath.startsWith('content://')) {
+            print('Merge: Detected content URI, converting to file path: $filePath');
+            try {
+              // Use PDFStorageService to copy content URI to app storage
+              actualFilePath = await PDFStorageService.ensureInAppStorage(filePath);
+              print('Merge: Content URI converted to: $actualFilePath');
+            } catch (e) {
+              print('Merge: Failed to convert content URI: $filePath, error: $e');
+              failedCount++;
+              continue;
+            }
+          }
+          
+          final file = File(actualFilePath);
+          if (!await file.exists()) {
+            print('Merge: File does not exist: $actualFilePath (original: $filePath)');
+            failedCount++;
+            continue;
+          }
+          
+          // Validate it's actually a PDF file
+          final stat = await file.stat();
+          if (stat.size == 0) {
+            print('Merge: File is empty: $actualFilePath');
+            failedCount++;
+            continue;
+          }
+          
+          // Check file extension
+          final extension = path.extension(actualFilePath).toLowerCase();
+          if (extension != '.pdf') {
+            print('Merge: File is not a PDF: $actualFilePath');
+            failedCount++;
+            continue;
+          }
+          
+          // Try to validate PDF by attempting to open it
+          try {
+            final bytes = await file.readAsBytes();
+            if (bytes.length < 4 || 
+                String.fromCharCodes(bytes.take(4)) != '%PDF') {
+              print('Merge: Invalid PDF file (missing PDF header): $actualFilePath');
+              failedCount++;
+              continue;
+            }
+          } catch (e) {
+            print('Merge: Error reading PDF file: $actualFilePath, error: $e');
+            failedCount++;
+            continue;
+          }
+          
+          // Create PDFFile object - use actual file path, not content URI
+          final pdf = PDFFile(
+            name: path.basename(actualFilePath),
+            date: PDFService.formatDate(stat.modified),
+            size: PDFService.formatFileSize(stat.size),
+            filePath: actualFilePath, // Use actual file path, not content URI
+            isFavorite: false,
+            dateModified: stat.modified,
+            fileSizeBytes: stat.size,
+          );
+          newPDFs.add(pdf);
+        } catch (e, stackTrace) {
+          print('Merge: Error loading PDF info for $filePath: $e');
+          print('Stack trace: $stackTrace');
+          failedCount++;
         }
       }
 
-      setState(() {
-        // Avoid duplicates
-        final existingPaths = _selectedPDFs.map((p) => p.filePath).toSet();
-        final uniqueNewPDFs = newPDFs.where((p) => 
-          p.filePath != null && !existingPaths.contains(p.filePath)
-        ).toList();
-        _selectedPDFs.addAll(uniqueNewPDFs);
-      });
+      if (mounted) {
+        setState(() {
+          // Avoid duplicates
+          final existingPaths = _selectedPDFs.map((p) => p.filePath).toSet();
+          final uniqueNewPDFs = newPDFs.where((p) => 
+            p.filePath != null && !existingPaths.contains(p.filePath)
+          ).toList();
+          _selectedPDFs.addAll(uniqueNewPDFs);
+        });
+        
+        // Show feedback if some files failed to load
+        if (failedCount > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                failedCount == selectedFiles.length
+                    ? 'Failed to load selected PDFs. Please check if files are valid PDFs.'
+                    : 'Loaded ${newPDFs.length} PDF(s). $failedCount file(s) could not be loaded.',
+              ),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        } else if (newPDFs.isNotEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Added ${newPDFs.length} PDF(s)'),
+              duration: const Duration(seconds: 2),
+            ),
+          );
+        }
+      }
     }
   }
 
@@ -395,38 +478,68 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
 
     setState(() => _isProcessing = true);
 
+    BuildContext? dialogContext;
     // Show loading dialog
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(
-          valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
-        ),
-      ),
+      builder: (context) {
+        dialogContext = context;
+        return const Center(
+          child: CircularProgressIndicator(
+            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFE53935)),
+          ),
+        );
+      },
     );
 
     try {
-      // Get file paths
-      final filePaths = _selectedPDFs
-          .where((pdf) => pdf.filePath != null)
-          .map((pdf) => pdf.filePath!)
-          .toList();
+      // Get file paths and validate they exist
+      final List<String> validFilePaths = [];
+      for (final pdf in _selectedPDFs) {
+        if (pdf.filePath != null) {
+          final file = File(pdf.filePath!);
+          if (await file.exists()) {
+            validFilePaths.add(pdf.filePath!);
+          } else {
+            print('Merge: File does not exist: ${pdf.filePath}');
+          }
+        }
+      }
 
-      if (filePaths.length < 2) {
+      if (validFilePaths.length < 2) {
+        if (mounted && dialogContext != null) {
+          Navigator.of(dialogContext!).pop(); // Close loading dialog
+          dialogContext = null;
+        }
         if (mounted) {
-          Navigator.pop(context); // Close loading dialog
           ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Please select at least 2 valid PDFs to merge'),
+            SnackBar(
+              content: Text(
+                validFilePaths.isEmpty
+                    ? 'Please select at least 2 valid PDFs to merge'
+                    : 'Only ${validFilePaths.length} valid PDF(s) found. Please select at least 2 valid PDFs.',
+              ),
+              backgroundColor: Colors.red,
             ),
           );
         }
         return;
       }
 
-      // Merge PDFs
-      String? finalMergedPath = await PDFToolsService.mergePDFs(filePaths);
+      // Merge PDFs with timeout protection
+      String? finalMergedPath = await PDFToolsService.mergePDFs(validFilePaths)
+          .timeout(
+            const Duration(minutes: 5),
+            onTimeout: () {
+              print('Merge PDF operation timed out');
+              return null;
+            },
+          )
+          .catchError((e) {
+            print('Error in merge PDF: $e');
+            return null;
+          });
       
       // Rename the merged file to user's chosen name (non-blocking)
       if (finalMergedPath != null) {
@@ -445,16 +558,36 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
         }
       }
 
-      // Close loading dialog
+      // Close loading dialog - ensure it's always closed
       if (mounted) {
-        Navigator.pop(context);
+        if (dialogContext != null) {
+          try {
+            Navigator.of(dialogContext!).pop();
+          } catch (e) {
+            print('Error closing merge dialog: $e');
+            // Try alternative method
+            try {
+              Navigator.of(context).pop();
+            } catch (e2) {
+              // Dialog might already be closed
+            }
+          }
+          dialogContext = null;
+        } else {
+          // Fallback: try to close any open dialog
+          try {
+            Navigator.of(context).pop();
+          } catch (e) {
+            // Dialog might already be closed
+          }
+        }
       }
 
       if (finalMergedPath != null) {
         // Save to history (non-blocking)
         unawaited(PDFPreferencesService.addToolsHistory(
           'merge',
-          filePaths.first,
+          validFilePaths.first,
           resultPath: finalMergedPath,
         ));
 
@@ -499,17 +632,53 @@ class _MergePDFScreenState extends State<MergePDFScreen> {
         }
       }
     } catch (e) {
+      // Close loading dialog if still open - ensure it's always closed
       if (mounted) {
-        Navigator.pop(context); // Close loading dialog
+        if (dialogContext != null) {
+          try {
+            Navigator.of(dialogContext!).pop();
+          } catch (e2) {
+            print('Error closing dialog in catch: $e2');
+            // Try alternative method
+            try {
+              Navigator.of(context).pop();
+            } catch (e3) {
+              // Dialog might already be closed
+            }
+          }
+          dialogContext = null;
+        } else {
+          // Fallback: try to close any open dialog
+          try {
+            Navigator.of(context).pop();
+          } catch (e2) {
+            // Dialog might already be closed
+          }
+        }
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error: ${e.toString()}'),
+            content: Text('Error merging PDFs: ${e.toString()}'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 4),
           ),
         );
       }
     } finally {
+      // Ensure dialog is closed and processing state is reset
       if (mounted) {
+        if (dialogContext != null) {
+          try {
+            Navigator.of(dialogContext!).pop();
+          } catch (e) {
+            // Dialog might already be closed, try alternative
+            try {
+              Navigator.of(context).pop();
+            } catch (e2) {
+              // Ignore - dialog already closed
+            }
+          }
+          dialogContext = null;
+        }
         setState(() => _isProcessing = false);
       }
     }

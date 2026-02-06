@@ -7,6 +7,7 @@ import '../painters/tool_icons_painter.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_service.dart';
 import '../services/pdf_preferences_service.dart';
+import '../services/pdf_storage_service.dart';
 import '../widgets/in_app_file_picker.dart';
 import 'pdf_viewer_screen.dart';
 import 'merge_pdf_screen.dart';
@@ -317,12 +318,32 @@ class _ToolsScreenState extends State<ToolsScreen> {
     if (selectedFiles == null || selectedFiles.isEmpty) return;
     final filePath = selectedFiles.first;
 
+    // Handle content URIs - convert to actual file path first
+    String actualFilePath = filePath;
+    if (filePath.startsWith('content://')) {
+      try {
+        print('Split: Detected content URI, converting to file path: $filePath');
+        actualFilePath = await PDFStorageService.ensureInAppStorage(filePath);
+        print('Split: Content URI converted to: $actualFilePath');
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Failed to access PDF file: $e'),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+        return;
+      }
+    }
+
     // Navigate to page selection screen
     final result = await Navigator.of(context).push<bool>(
       MaterialPageRoute(
         builder: (context) => SplitPDFPageSelectionScreen(
-          pdfPath: filePath,
-          fileName: path.basename(filePath),
+          pdfPath: actualFilePath, // Use converted file path
+          fileName: path.basename(actualFilePath),
         ),
       ),
     );

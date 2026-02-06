@@ -24,6 +24,7 @@ add_library(pdf_editor_native SHARED
     pdf_text_detector.cpp
     pdf_annotation_editor.cpp
     pdf_text_quad_extractor.cpp
+    pdf_page_renderer.cpp
 )
 
 # Add library search path BEFORE linking

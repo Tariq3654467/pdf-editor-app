@@ -1,8 +1,11 @@
 package com.example.pdf_editor_app
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
 
 /**
  * Service for PDF editing using MuPDF native engine
@@ -172,6 +175,28 @@ class PDFEditorService(private val methodChannel: MethodChannel) {
                     } catch (e: Exception) {
                         Log.e(TAG, "Error getting text quads: ${e.message}", e)
                         result.error("ERROR", e.message, null)
+                    }
+                } else {
+                    result.error("INVALID_ARGUMENT", "PDF path is null", null)
+                }
+            }
+            
+            "renderPageToImage" -> {
+                val pdfPath = call.argument<String>("path")
+                val pageIndex = call.argument<Int>("pageIndex") ?: 0
+                val scale = call.argument<Double>("scale")?.toFloat() ?: 0.3f
+                
+                if (pdfPath != null) {
+                    try {
+                        val imageBytes = pdfEditor.renderPageToImage(pdfPath, pageIndex, scale)
+                        if (imageBytes != null) {
+                            result.success(imageBytes)
+                        } else {
+                            result.success(null)
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error rendering page to image: ${e.message}", e)
+                        result.success(null)
                     }
                 } else {
                     result.error("INVALID_ARGUMENT", "PDF path is null", null)

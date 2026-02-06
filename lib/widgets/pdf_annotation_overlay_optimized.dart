@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:syncfusion_flutter_pdfviewer/pdfviewer.dart';
 import '../utils/touch_throttler.dart';
 import 'pdf_annotation_overlay.dart'; // Import original for data classes
 
@@ -22,6 +23,8 @@ class PDFAnnotationOverlayOptimized extends StatefulWidget {
   final Function(bool)? onRedoStateChanged;
   final List<TextAnnotation>? textAnnotations;
   final Function(TextAnnotation)? onTextTap;
+  final Size? pageSize; // PDF page size for proper coordinate conversion
+  final PdfPageLayoutMode? pageLayoutMode; // Page layout mode (single vs continuous)
 
   const PDFAnnotationOverlayOptimized({
     super.key,
@@ -38,6 +41,8 @@ class PDFAnnotationOverlayOptimized extends StatefulWidget {
     this.onRedoStateChanged,
     this.textAnnotations,
     this.onTextTap,
+    this.pageSize,
+    this.pageLayoutMode,
   });
 
   @override
@@ -234,20 +239,58 @@ class PDFAnnotationOverlayOptimizedState
       return Container();
     }
 
+    // Get screen size for coordinate conversion
+    final screenSize = MediaQuery.of(context).size;
+    
+    // Calculate PDF page dimensions if pageSize is provided
+    Size? pdfPageSize = widget.pageSize;
+    double renderedPdfWidth = overlaySize.width;
+    double renderedPdfHeight = overlaySize.height;
+    
+    if (pdfPageSize != null && pdfPageSize.width > 0) {
+      // PDF is scaled to fit screen width, height scales proportionally
+      final pdfAspectRatio = pdfPageSize.height / pdfPageSize.width;
+      renderedPdfWidth = screenSize.width;
+      renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    }
+
     return Stack(
       children: widget.textAnnotations!
           .where((textAnnotation) => textAnnotation.pageNumber == widget.currentPage)
           .map((textAnnotation) {
-        final screenX = textAnnotation.position.dx * overlaySize.width;
-        final screenY = textAnnotation.documentY != null
-            ? textAnnotation.documentY! - widget.scrollOffset
-            : textAnnotation.position.dy * overlaySize.height;
+        // DEBUG: Log annotation info
+        print('[ANNOTATION_DEBUG] TextAnnotation: id=${textAnnotation.id}, page=${textAnnotation.pageNumber}, '
+            'position=${textAnnotation.position}, documentY=${textAnnotation.documentY}');
+        
+        Offset screenPosition;
+        
+        if (textAnnotation.documentY != null && pdfPageSize != null) {
+          // Use documentY (absolute document coordinate) - need to convert properly
+          final absoluteDocumentY = textAnnotation.documentY!;
+          final annotationPageIndex = textAnnotation.pageNumber - 1; // Convert to 0-based
+          final pageStartY = annotationPageIndex * renderedPdfHeight;
+          final relativeYInPage = absoluteDocumentY - pageStartY;
+          final screenX = textAnnotation.position.dx * renderedPdfWidth;
+          final screenY = pageStartY + relativeYInPage - widget.scrollOffset;
+          screenPosition = Offset(screenX, screenY);
+          
+          print('[ANNOTATION_DEBUG] Using documentY: absoluteY=$absoluteDocumentY, '
+              'pageIndex=$annotationPageIndex, pageStartY=$pageStartY, '
+              'relativeY=$relativeYInPage, screenY=$screenY, scrollOffset=${widget.scrollOffset}');
+        } else {
+          // Fallback: use normalized position (0-1 range)
+          final screenX = textAnnotation.position.dx * overlaySize.width;
+          final screenY = textAnnotation.position.dy * overlaySize.height;
+          screenPosition = Offset(screenX, screenY);
+          
+          print('[ANNOTATION_DEBUG] Using normalized position: screenX=$screenX, screenY=$screenY');
+        }
 
         return Positioned(
-          left: screenX,
-          top: screenY,
-          child: GestureDetector(
-            onTap: () => widget.onTextTap?.call(textAnnotation),
+          left: screenPosition.dx,
+          top: screenPosition.dy,
+          child: IgnorePointer(
+            // Individual text widgets don't handle taps - global handler does hit-testing
             child: Text(
               textAnnotation.text,
               style: TextStyle(
@@ -260,6 +303,79 @@ class PDFAnnotationOverlayOptimizedState
         );
       }).toList(),
     );
+  }
+  
+  /// Handle global tap for proper annotation hit-testing
+  void _handleGlobalTap(TapDownDetails details, Size overlaySize) {
+    if (widget.textAnnotations == null || widget.textAnnotations!.isEmpty || widget.onTextTap == null) {
+      return;
+    }
+    
+    final tapPoint = details.localPosition;
+    print('[ANNOTATION_DEBUG] Global tap at: $tapPoint');
+    
+    final screenSize = MediaQuery.of(context).size;
+    Size? pdfPageSize = widget.pageSize;
+    double renderedPdfWidth = overlaySize.width;
+    double renderedPdfHeight = overlaySize.height;
+    
+    if (pdfPageSize != null && pdfPageSize.width > 0) {
+      final pdfAspectRatio = pdfPageSize.height / pdfPageSize.width;
+      renderedPdfWidth = screenSize.width;
+      renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    }
+    
+    final candidates = <TextAnnotation>[];
+    
+    for (var textAnnotation in widget.textAnnotations!) {
+      if (textAnnotation.pageNumber != widget.currentPage) continue;
+      
+      Offset screenPosition;
+      
+      if (textAnnotation.documentY != null && pdfPageSize != null) {
+        final absoluteDocumentY = textAnnotation.documentY!;
+        final annotationPageIndex = textAnnotation.pageNumber - 1;
+        final pageStartY = annotationPageIndex * renderedPdfHeight;
+        final relativeYInPage = absoluteDocumentY - pageStartY;
+        final screenX = textAnnotation.position.dx * renderedPdfWidth;
+        final screenY = pageStartY + relativeYInPage - widget.scrollOffset;
+        screenPosition = Offset(screenX, screenY);
+      } else {
+        final screenX = textAnnotation.position.dx * overlaySize.width;
+        final screenY = textAnnotation.position.dy * overlaySize.height;
+        screenPosition = Offset(screenX, screenY);
+      }
+      
+      final textPainter = TextPainter(
+        text: TextSpan(
+          text: textAnnotation.text,
+          style: TextStyle(fontSize: textAnnotation.fontSize),
+        ),
+        textDirection: TextDirection.ltr,
+      );
+      textPainter.layout();
+      final textBounds = Rect.fromLTWH(
+        screenPosition.dx,
+        screenPosition.dy,
+        textPainter.width,
+        textPainter.height,
+      );
+      
+      final tolerance = 10.0;
+      final expandedBounds = textBounds.inflate(tolerance);
+      if (expandedBounds.contains(tapPoint)) {
+        print('[ANNOTATION_DEBUG] Found candidate: id=${textAnnotation.id}, bounds=$textBounds');
+        candidates.add(textAnnotation);
+      }
+    }
+    
+    if (candidates.isNotEmpty) {
+      final selected = candidates.last;
+      print('[ANNOTATION_DEBUG] Selected annotation: id=${selected.id} from ${candidates.length} candidates');
+      widget.onTextTap?.call(selected);
+    } else {
+      print('[ANNOTATION_DEBUG] No annotation found at tap point: $tapPoint');
+    }
   }
 
   @override
@@ -316,17 +432,38 @@ class PDFAnnotationOverlayOptimizedState
                             ),
                           ),
                         )
-                      : IgnorePointer(
-                          ignoring: true,
-                          child: ValueListenableBuilder<List<List<AnnotationPoint>>>(
-                            valueListenable: _pathsNotifier,
-                            builder: (context, paths, _) {
-                              return CustomPaint(
-                                painter: OptimizedAnnotationPainter(
-                                  paths: paths,
-                                  currentPath: [],
-                                  overlaySize: constraints.biggest,
-                                  currentPage: widget.currentPage,
+                      : (hasTextAnnotations && widget.onTextTap != null)
+                          ? GestureDetector(
+                              onTapDown: (details) => _handleGlobalTap(details, constraints.biggest),
+                              behavior: HitTestBehavior.translucent,
+                              child: ValueListenableBuilder<List<List<AnnotationPoint>>>(
+                                valueListenable: _pathsNotifier,
+                                builder: (context, paths, _) {
+                                  return CustomPaint(
+                                    painter: OptimizedAnnotationPainter(
+                                      paths: paths,
+                                      currentPath: [],
+                                      overlaySize: constraints.biggest,
+                                      currentPage: widget.currentPage,
+                                      scrollOffset: widget.scrollOffset,
+                                      textAnnotations: widget.textAnnotations ?? [],
+                                    ),
+                                    child: _buildTextOverlays(constraints.biggest),
+                                  );
+                                },
+                              ),
+                            )
+                          : IgnorePointer(
+                              ignoring: true,
+                              child: ValueListenableBuilder<List<List<AnnotationPoint>>>(
+                                valueListenable: _pathsNotifier,
+                                builder: (context, paths, _) {
+                                  return CustomPaint(
+                                    painter: OptimizedAnnotationPainter(
+                                      paths: paths,
+                                      currentPath: [],
+                                      overlaySize: constraints.biggest,
+                                      currentPage: widget.currentPage,
                                   scrollOffset: widget.scrollOffset,
                                   textAnnotations: widget.textAnnotations ?? [],
                                 ),

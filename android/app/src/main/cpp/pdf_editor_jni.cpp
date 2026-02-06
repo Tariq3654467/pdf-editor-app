@@ -25,6 +25,7 @@ jboolean addUnderlineAnnotation(JNIEnv *env, jstring pdfPath, jint pageIndex,
                                 jint colorR, jint colorG, jint colorB, jfloat strokeWidth);
 jstring getTextQuadsForSelection(JNIEnv *env, jstring pdfPath, jint pageIndex,
                                  jfloat startX, jfloat startY, jfloat endX, jfloat endY);
+jbyteArray renderPageToImage(JNIEnv *env, jstring pdfPath, jint pageIndex, jfloat scale);
 
 /**
  * Load PDF document
@@ -143,6 +144,16 @@ Java_com_example_pdf_1editor_1app_PDFEditorNative_getTextQuadsForSelection(JNIEn
                                                                              jfloat startX, jfloat startY,
                                                                              jfloat endX, jfloat endY) {
     return getTextQuadsForSelection(env, pdfPath, pageIndex, startX, startY, endX, endY);
+}
+
+/**
+ * Render PDF page to image bytes (PNG format)
+ */
+JNIEXPORT jbyteArray JNICALL
+Java_com_example_pdf_1editor_1app_PDFEditorNative_renderPageToImage(JNIEnv *env, jobject thiz,
+                                                                     jstring pdfPath, jint pageIndex,
+                                                                     jfloat scale) {
+    return renderPageToImage(env, pdfPath, pageIndex, scale);
 }
 
 } // extern "C"

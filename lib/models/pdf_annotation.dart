@@ -9,6 +9,7 @@ class TextQuad {
   final Offset bottomRight;
   final int pageIndex;
   final String? text; // Optional: the actual text content
+  final String? objectId; // Optional: MuPDF text object identifier for editing
 
   TextQuad({
     required this.topLeft,
@@ -17,8 +18,9 @@ class TextQuad {
     required this.bottomRight,
     required this.pageIndex,
     this.text,
+    this.objectId,
   });
-
+  
   /// Create from JSON
   factory TextQuad.fromJson(Map<String, dynamic> json) {
     return TextQuad(
@@ -40,9 +42,10 @@ class TextQuad {
       ),
       pageIndex: json['pageIndex'] ?? json['page'] ?? 0,
       text: json['text'],
+      objectId: json['objectId'],
     );
   }
-
+  
   /// Convert to JSON
   Map<String, dynamic> toJson() {
     return {
@@ -52,6 +55,7 @@ class TextQuad {
       'bottomRight': {'x': bottomRight.dx, 'y': bottomRight.dy},
       'pageIndex': pageIndex,
       'text': text,
+      'objectId': objectId,
     };
   }
 

@@ -330,8 +330,10 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   void _onPanUpdate(DragUpdateDetails details) {
     if (widget.selectedTool == null) return;
 
-    // For pen drawing, use current page to prevent page boundary issues
-    final useCurrentPage = widget.selectedTool == 'pen';
+    // For pen, highlight, and underline, use current page to prevent page boundary issues
+    final useCurrentPage = widget.selectedTool == 'pen' || 
+                          widget.selectedTool == 'highlight' || 
+                          widget.selectedTool == 'underline';
     final pdfPoint = _screenToPdf(details.localPosition, useCurrentPage: useCurrentPage);
 
     if (widget.selectedTool == 'pen') {

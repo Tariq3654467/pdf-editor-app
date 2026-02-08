@@ -1301,6 +1301,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'pen',
             onTap: () {
               setState(() {
+                _isEditingMode = true; // Enable editing mode
                 _selectedTool = 'pen';
                 _isTextEditMode = false; // Exit text mode when selecting drawing tool
                 _selectedPDFText = null; // Clear text selection
@@ -1315,6 +1316,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'highlight',
             onTap: () {
               setState(() {
+                _isEditingMode = true; // Enable editing mode
                 _selectedTool = 'highlight';
                 _isTextEditMode = false; // Exit text mode when selecting drawing tool
                 _selectedPDFText = null; // Clear text selection
@@ -1329,6 +1331,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'underline',
             onTap: () {
               setState(() {
+                _isEditingMode = true; // Enable editing mode
                 _selectedTool = 'underline';
                 _isTextEditMode = false; // Exit text mode when selecting drawing tool
                 _selectedPDFText = null; // Clear text selection

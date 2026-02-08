@@ -270,17 +270,21 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     // Convert to PDF page coordinates (points, not pixels)
     // X: screen X position maps directly to PDF X (both scale with width)
     final pdfX = (screenPoint.dx / renderedPdfWidth) * widget.pageSize.width;
-    // Y: relative position in page maps to PDF Y
-    final pdfY = (relativeYInPage / renderedPdfHeight) * widget.pageSize.height;
+    
+    // Y: Convert screen Y to PDF Y (both measured from bottom)
+    // Screen: Y=0 at top, Y=renderedHeight at bottom
+    // PDF: Y=0 at bottom, Y=pageHeight at top
+    // Screen Y from top = relativeYInPage
+    // Screen Y from bottom = renderedPdfHeight - relativeYInPage
+    // PDF Y from bottom = (screen Y from bottom / renderedPdfHeight) * pageSize.height
+    final screenYFromBottom = renderedPdfHeight - relativeYInPage;
+    final pdfY = (screenYFromBottom / renderedPdfHeight) * widget.pageSize.height;
     
     // Clamp coordinates to page boundaries to prevent drawing outside the page
     final clampedX = pdfX.clamp(0.0, widget.pageSize.width);
     final clampedY = pdfY.clamp(0.0, widget.pageSize.height);
     
-    // Invert Y-axis (PDF uses bottom-left origin)
-    final invertedY = widget.pageSize.height - clampedY;
-    
-    return Offset(clampedX, invertedY);
+    return Offset(clampedX, clampedY);
   }
 
   /// Convert PDF coordinates to screen coordinates
@@ -413,27 +417,48 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   Future<void> _saveTextAwareAnnotation() async {
     if (_selectionStart == null || _selectionEnd == null) return;
 
+    // Normalize selection rectangle (ensure start is top-left, end is bottom-right)
+    final minX = math.min(_selectionStart!.dx, _selectionEnd!.dx);
+    final maxX = math.max(_selectionStart!.dx, _selectionEnd!.dx);
+    final minY = math.min(_selectionStart!.dy, _selectionEnd!.dy);
+    final maxY = math.max(_selectionStart!.dy, _selectionEnd!.dy);
+    
+    // Calculate selection size
+    final selectionWidth = maxX - minX;
+    final selectionHeight = maxY - minY;
+    final selectionSize = math.sqrt(selectionWidth * selectionWidth + selectionHeight * selectionHeight);
+    
+    // If selection is very small (like a tap), use a generous expansion
+    // Otherwise, use a smaller expansion for drag selections
+    final expansion = selectionSize < 20.0 ? 20.0 : 10.0; // PDF units
+    
+    final normalizedStart = Offset(minX - expansion, minY - expansion);
+    final normalizedEnd = Offset(maxX + expansion, maxY + expansion);
+
+    _debugLog('Getting text quads for selection: start=$normalizedStart, end=$normalizedEnd, size=$selectionSize');
+
     // Get text quads from MuPDF
     final jsonString = await MuPDFEditorService.getTextQuadsForSelection(
       widget.pdfPath,
       widget.currentPage,
-      _selectionStart!,
-      _selectionEnd!,
+      normalizedStart,
+      normalizedEnd,
     );
 
     if (jsonString == null || jsonString.isEmpty) {
-      print('No text quads found for selection');
+      _debugLog('No text quads found for selection');
       return;
     }
 
     try {
       final quadsJson = jsonDecode(jsonString) as List;
       if (quadsJson.isEmpty) {
-        print('Empty quads array');
+        _debugLog('Empty quads array');
         return;
       }
 
       final quads = quadsJson.map((q) => TextQuad.fromJson(q as Map<String, dynamic>)).toList();
+      _debugLog('Found ${quads.length} text quads for annotation');
 
       PDFAnnotation annotation;
       if (widget.selectedTool == 'highlight') {
@@ -462,7 +487,9 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
         _annotations.add(annotation);
       });
       widget.onAnnotationsChanged?.call(_annotations);
+      _debugLog('Successfully created ${widget.selectedTool} annotation with ${quads.length} quads');
     } catch (e) {
+      _debugLog('Error parsing text quads: $e');
       print('Error parsing text quads: $e');
     }
   }

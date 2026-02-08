@@ -1346,6 +1346,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             isSelected: _selectedTool == 'eraser',
             onTap: () {
               setState(() {
+                _isEditingMode = true; // Enable editing mode
                 _selectedTool = 'eraser';
                 _isTextEditMode = false; // Exit text mode when selecting drawing tool
                 _selectedPDFText = null; // Clear text selection
@@ -2721,6 +2722,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       }
 
       print('PDFTextTap: Found word "${wordQuad.text}" at page ${wordQuad.pageIndex}');
+
+      // If highlight or underline tool is selected, create annotation automatically
+      if (_selectedTool == 'highlight' || _selectedTool == 'underline') {
+        await _createAnnotationFromTextQuad(wordQuad);
+        return;
+      }
 
       // Text and objectId come directly from the MuPDF quad extraction.
       // This is the SINGLE source of truth for selection; no second lookup.

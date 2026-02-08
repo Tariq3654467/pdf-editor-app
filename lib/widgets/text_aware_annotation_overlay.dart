@@ -247,7 +247,7 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
 
   /// Convert screen coordinates to PDF coordinates
   /// Syncfusion PDF viewer scales PDF to fit screen width
-  Offset _screenToPdf(Offset screenPoint) {
+  Offset _screenToPdf(Offset screenPoint, {bool useCurrentPage = false}) {
     // Get screen size for scaling calculation
     final screenSize = widget.screenSize ?? MediaQuery.of(context).size;
     
@@ -259,8 +259,11 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     // Account for scroll - screen position is relative to visible viewport
     final absoluteDocumentY = screenPoint.dy + widget.scrollOffset.dy;
     
-    // Calculate which page this position belongs to (for multi-page vertical scroll)
-    final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
+    // For pen drawing, always use current page to prevent vertical lines at page boundaries
+    // For other tools (like text selection), calculate page from position
+    final pageIndex = useCurrentPage 
+        ? widget.currentPage 
+        : (absoluteDocumentY / renderedPdfHeight).floor();
     final pageStartY = pageIndex * renderedPdfHeight;
     final relativeYInPage = absoluteDocumentY - pageStartY;
     
@@ -270,10 +273,14 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     // Y: relative position in page maps to PDF Y
     final pdfY = (relativeYInPage / renderedPdfHeight) * widget.pageSize.height;
     
-    // Invert Y-axis (PDF uses bottom-left origin)
-    final invertedY = widget.pageSize.height - pdfY;
+    // Clamp coordinates to page boundaries to prevent drawing outside the page
+    final clampedX = pdfX.clamp(0.0, widget.pageSize.width);
+    final clampedY = pdfY.clamp(0.0, widget.pageSize.height);
     
-    return Offset(pdfX, invertedY);
+    // Invert Y-axis (PDF uses bottom-left origin)
+    final invertedY = widget.pageSize.height - clampedY;
+    
+    return Offset(clampedX, invertedY);
   }
 
   /// Convert PDF coordinates to screen coordinates
@@ -296,7 +303,11 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     }
 
     _debugLog('Pan start: tool=${widget.selectedTool}, position=${details.localPosition}');
-    final pdfPoint = _screenToPdf(details.localPosition);
+    // For pen, highlight, and underline, use current page to prevent page boundary issues
+    final useCurrentPage = widget.selectedTool == 'pen' || 
+                          widget.selectedTool == 'highlight' || 
+                          widget.selectedTool == 'underline';
+    final pdfPoint = _screenToPdf(details.localPosition, useCurrentPage: useCurrentPage);
     _debugLog('Converted to PDF: $pdfPoint');
 
     if (widget.selectedTool == 'pen') {
@@ -319,7 +330,9 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   void _onPanUpdate(DragUpdateDetails details) {
     if (widget.selectedTool == null) return;
 
-    final pdfPoint = _screenToPdf(details.localPosition);
+    // For pen drawing, use current page to prevent page boundary issues
+    final useCurrentPage = widget.selectedTool == 'pen';
+    final pdfPoint = _screenToPdf(details.localPosition, useCurrentPage: useCurrentPage);
 
     if (widget.selectedTool == 'pen') {
       // Prevent adding duplicate or very close points to avoid vertical lines

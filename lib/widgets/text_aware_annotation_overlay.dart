@@ -246,7 +246,9 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   }
 
   /// Convert screen coordinates to PDF page coordinates (page-space)
-  /// Formula: pPage = (pScreen + scroll - pageOriginScreen) / zoom
+  /// CRITICAL: Pointer events come in overlay coordinate space (AFTER Transform.translate),
+  /// so screenPoint.dy is already in document-absolute space (scroll already accounted for).
+  /// Formula: pPage = (pScreen - pageOriginScreen) / zoom
   /// This ensures annotations are stored in page-space and don't move with scroll/zoom
   Offset _screenToPdf(Offset screenPoint, {bool useCurrentPage = false}) {
     // Get screen size for scaling calculation
@@ -257,19 +259,19 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     final renderedPdfWidth = screenSize.width;
     final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
     
-    // Calculate page origin on screen (where current page starts in viewport)
-    // For multi-page vertical scroll, each page starts at pageIndex * renderedPdfHeight
+    // Calculate page origin in document-absolute space
+    // Pointer events are already in document-absolute space (Transform.translate applied)
     final pageIndex = useCurrentPage 
         ? widget.currentPage 
-        : ((screenPoint.dy + widget.scrollOffset.dy) / renderedPdfHeight).floor();
+        : (screenPoint.dy / renderedPdfHeight).floor();
     final pageOriginScreen = Offset(0, pageIndex * renderedPdfHeight);
     
-    // Account for scroll - screen position is relative to visible viewport
-    final absoluteDocumentY = screenPoint.dy + widget.scrollOffset.dy;
-    final relativeYInPage = absoluteDocumentY - pageOriginScreen.dy;
+    // screenPoint is already in document-absolute space (scroll handled by Transform.translate)
+    // So we just need to subtract page origin and divide by zoom
+    final relativeYInPage = screenPoint.dy - pageOriginScreen.dy;
     
     // Convert to PDF page coordinates using proper formula:
-    // pPage = (pScreen + scroll - pageOriginScreen) / zoom
+    // pPage = (pScreen - pageOriginScreen) / zoom
     // Effective zoom = baseScale * widget.zoomLevel, where baseScale fits page width
     final baseScale = renderedPdfWidth / widget.pageSize.width;
     final effectiveZoom = baseScale * widget.zoomLevel;
@@ -280,7 +282,6 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     // Y: Convert screen Y to PDF Y (accounting for zoom and Y-axis inversion)
     // Screen: Y=0 at top, increases downward
     // PDF: Y=0 at bottom, increases upward
-    // First convert to relative position in page, then invert Y-axis
     final relativeYInPageNormalized = relativeYInPage / effectiveZoom;
     final renderedPdfHeightInPageSpace = widget.pageSize.height * widget.zoomLevel;
     final screenYFromBottom = renderedPdfHeightInPageSpace - relativeYInPageNormalized;

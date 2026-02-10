@@ -32,6 +32,9 @@ import '../widgets/text_aware_annotation_overlay.dart';
 import '../models/pdf_annotation.dart';
 import '../services/annotation_storage_service.dart';
 
+/// Active tool for the bottom annotation toolbar
+enum PdfTool { none, copy, pen, highlight, underline, eraser }
+
 class PDFViewerScreen extends StatefulWidget {
   final String filePath;
   final String fileName;
@@ -79,7 +82,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   // Annotation/Editing state
   bool _isEditingMode = false;
   bool _isContentEditMode = false; // True content editing mode (Sejda-style)
-  String _selectedTool = 'pen'; // 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
+  PdfTool _selectedTool = PdfTool.none;
+  // Internal string mode used by overlays/text editor: 'pen', 'highlight', 'underline', 'eraser', 'text', 'none'
+  String _selectedMode = 'none';
   Color _selectedColor = Colors.red;
   double _strokeWidth = 3.0;
   final GlobalKey<PDFAnnotationOverlayState> _annotationOverlayKey = GlobalKey<PDFAnnotationOverlayState>();
@@ -114,10 +119,104 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   // Helper to determine when a drawing tool is really active
   bool get _isDrawingToolActive =>
       _isEditingMode &&
-      (_selectedTool == 'pen' ||
-       _selectedTool == 'highlight' ||
-       _selectedTool == 'underline' ||
-       _selectedTool == 'eraser');
+      (_selectedTool == PdfTool.pen ||
+       _selectedTool == PdfTool.highlight ||
+       _selectedTool == PdfTool.underline ||
+       _selectedTool == PdfTool.eraser);
+
+  /// Map the active [PdfTool] to the overlay's string-based tool id
+  String? get _selectedOverlayTool {
+    if (!_isEditingMode) return null;
+    switch (_selectedTool) {
+      case PdfTool.pen:
+        return 'pen';
+      case PdfTool.eraser:
+        return 'eraser';
+      case PdfTool.highlight:
+      case PdfTool.underline:
+      case PdfTool.copy:
+      case PdfTool.none:
+        // Copy/none should not block PDF viewer gestures
+        return null;
+    }
+  }
+
+  /// Central place to activate a tool and keep state in sync
+  void _selectTool(PdfTool tool) {
+    setState(() {
+      _selectedTool = tool;
+      _isEditingMode = tool != PdfTool.none;
+
+      // Map enum to internal string mode for existing overlays/text editor
+      switch (tool) {
+        case PdfTool.pen:
+          _selectedMode = 'pen';
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          break;
+        case PdfTool.highlight:
+          _selectedMode = 'none'; // handled by Syncfusion annotationMode
+          _pdfViewerController.annotationMode = PdfAnnotationMode.highlight;
+          break;
+        case PdfTool.underline:
+          _selectedMode = 'none'; // handled by Syncfusion annotationMode
+          _pdfViewerController.annotationMode = PdfAnnotationMode.underline;
+          break;
+        case PdfTool.eraser:
+          _selectedMode = 'eraser';
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          break;
+        case PdfTool.copy:
+          _selectedMode = 'none'; // copy should not interfere with overlay gestures
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          break;
+        case PdfTool.none:
+          _selectedMode = 'none';
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          break;
+      }
+
+      // Exiting any text-editing mode when switching tools
+      _isTextEditMode = false;
+      _selectedPDFText = null;
+      _showTextFormattingToolbar = false;
+    });
+  }
+
+  /// Handle tapping the Done button: persist annotations & exit edit mode
+  Future<void> _onDoneEditing() async {
+    // Cancel any pending debounced reloads
+    _pdfReloadDebounceTimer?.cancel();
+
+    // Persist custom overlay annotations snapshot via storage service if possible
+    try {
+      if (_actualFilePath != null && _savedAnnotations.isNotEmpty) {
+        await _annotationStorage.saveAnnotations(_actualFilePath!, _savedAnnotations);
+      }
+    } catch (e) {
+      // Non-fatal; we still exit edit mode but log the error
+      print('Error saving annotations on Done: $e');
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      _isEditingMode = false;
+      _selectedTool = PdfTool.none;
+      _selectedMode = 'none';
+      _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+      // Reload PDF when exiting edit mode to show all saved annotations
+      _pdfReloadKey++;
+    });
+
+    // Show success message
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('All changes saved'),
+        backgroundColor: Colors.green,
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
 
   @override
   void initState() {
@@ -1030,7 +1129,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             zoomLevel: _zoomLevel,
             scrollOffset: Offset(0, _pdfScrollOffset),
             screenSize: MediaQuery.of(context).size,
-            selectedTool: _isEditingMode ? _selectedTool : null,
+            selectedTool: _selectedOverlayTool,
             toolColor: _selectedColor,
             strokeWidth: _strokeWidth,
             onAnnotationsChanged: (annotations) {
@@ -1191,26 +1290,30 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
   Color _getToolColor() {
     switch (_selectedTool) {
-      case 'highlight':
+      case PdfTool.highlight:
         return Colors.yellow.withOpacity(0.4);
-      case 'underline':
+      case PdfTool.underline:
         return Colors.blue;
-      case 'eraser':
+      case PdfTool.eraser:
         return Colors.white;
-      default:
+      case PdfTool.pen:
+      case PdfTool.copy:
+      case PdfTool.none:
         return _selectedColor;
     }
   }
 
   double _getStrokeWidth() {
     switch (_selectedTool) {
-      case 'highlight':
+      case PdfTool.highlight:
         return 15.0; // Thicker for highlight
-      case 'underline':
+      case PdfTool.underline:
         return 2.0; // Thin line for underline
-      case 'eraser':
+      case PdfTool.eraser:
         return 20.0; // Larger eraser
-      default:
+      case PdfTool.pen:
+      case PdfTool.copy:
+      case PdfTool.none:
         return _strokeWidth;
     }
   }
@@ -1279,15 +1382,21 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           _buildToolButton(
             icon: Icons.content_copy,
             label: 'Copy',
-            isSelected: false,
+            isSelected: _selectedTool == PdfTool.copy,
             onTap: () {
-              if (_selectedPDFText != null) {
+              // If Copy is already active and we have text, perform copy immediately
+              if (_selectedTool == PdfTool.copy && _selectedPDFText != null) {
                 _copySelectedText();
-              } else {
-                // Try to copy from PDF viewer's text selection
+                return;
+              }
+
+              // Activate copy tool (does not engage drawing overlay)
+              _selectTool(PdfTool.copy);
+
+              if (_selectedPDFText == null) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('No text selected. Select text first by long-pressing on it.'),
+                    content: Text('Long‑press text in the PDF to select it, then tap Copy again.'),
                     duration: Duration(seconds: 2),
                   ),
                 );
@@ -1298,60 +1407,36 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           _buildToolButton(
             icon: Icons.edit,
             label: 'Pen',
-            isSelected: _selectedTool == 'pen',
+            isSelected: _selectedTool == PdfTool.pen,
             onTap: () {
-              setState(() {
-                _isEditingMode = true; // Enable editing mode
-                _selectedTool = 'pen';
-                _isTextEditMode = false; // Exit text mode when selecting drawing tool
-                _selectedPDFText = null; // Clear text selection
-                _showTextFormattingToolbar = false;
-              });
+              _selectTool(PdfTool.pen);
             },
           ),
           // Highlight tool
           _buildToolButton(
             icon: Icons.highlight,
             label: 'Highlight',
-            isSelected: _selectedTool == 'highlight',
+            isSelected: _selectedTool == PdfTool.highlight,
             onTap: () {
-              setState(() {
-                _isEditingMode = true; // Enable editing mode
-                _selectedTool = 'highlight';
-                _isTextEditMode = false; // Exit text mode when selecting drawing tool
-                _selectedPDFText = null; // Clear text selection
-                _showTextFormattingToolbar = false;
-              });
+              _selectTool(PdfTool.highlight);
             },
           ),
           // Underline tool
           _buildToolButton(
             icon: Icons.format_underline,
             label: 'Underline',
-            isSelected: _selectedTool == 'underline',
+            isSelected: _selectedTool == PdfTool.underline,
             onTap: () {
-              setState(() {
-                _isEditingMode = true; // Enable editing mode
-                _selectedTool = 'underline';
-                _isTextEditMode = false; // Exit text mode when selecting drawing tool
-                _selectedPDFText = null; // Clear text selection
-                _showTextFormattingToolbar = false;
-              });
+              _selectTool(PdfTool.underline);
             },
           ),
           // Eraser tool
           _buildToolButton(
             icon: Icons.cleaning_services,
             label: 'Eraser',
-            isSelected: _selectedTool == 'eraser',
+            isSelected: _selectedTool == PdfTool.eraser,
             onTap: () {
-              setState(() {
-                _isEditingMode = true; // Enable editing mode
-                _selectedTool = 'eraser';
-                _isTextEditMode = false; // Exit text mode when selecting drawing tool
-                _selectedPDFText = null; // Clear text selection
-                _showTextFormattingToolbar = false;
-              });
+              _selectTool(PdfTool.eraser);
             },
           ),
           // Done button
@@ -1360,24 +1445,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             label: 'Done',
             isSelected: false,
             onTap: () {
-              // Cancel any pending debounced reloads
-              _pdfReloadDebounceTimer?.cancel();
-              
-              setState(() {
-                _isEditingMode = false;
-                _selectedTool = 'none';
-                // Reload PDF when exiting edit mode to show all saved annotations
-                _pdfReloadKey++;
-              });
-              
-              // Show success message
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('All changes saved'),
-                  backgroundColor: Colors.green,
-                  duration: Duration(seconds: 2),
-                ),
-              );
+              _onDoneEditing();
             },
             color: Colors.green,
           ),
@@ -1401,22 +1469,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       buttonColor = color;
     } else {
       switch (_selectedTool) {
-        case 'pen':
+        case PdfTool.pen:
           buttonColor = Colors.red;
           break;
-        case 'highlight':
+        case PdfTool.highlight:
           buttonColor = Colors.yellow[700]!;
           break;
-        case 'underline':
+        case PdfTool.underline:
           buttonColor = Colors.blue;
           break;
-        case 'eraser':
+        case PdfTool.eraser:
           buttonColor = Colors.orange;
           break;
-        case 'text':
-          buttonColor = Colors.green;
-          break;
-        default:
+        case PdfTool.copy:
+        case PdfTool.none:
           buttonColor = Colors.grey[700]!;
       }
     }
@@ -2213,10 +2279,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Future<void> _handleTextEditTap(Offset position) async {
     // Allow text editing even if text tool wasn't explicitly selected
     // This makes it more intuitive - just tap on text to edit
-    if (!_isTextEditMode && _selectedTool != 'text') {
+    if (!_isTextEditMode && _selectedMode != 'text') {
       // Auto-enable text mode when user taps (more intuitive)
       setState(() {
-        _selectedTool = 'text';
+        _selectedMode = 'text';
         _isTextEditMode = true;
       });
     }
@@ -2343,7 +2409,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           setState(() {
             // Changes will be visible when PDF is reopened or when exiting edit mode
             _isTextEditMode = false;
-            _selectedTool = 'none';
+            _selectedMode = 'none';
           });
           
           ScaffoldMessenger.of(context).showSnackBar(
@@ -2688,7 +2754,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         print('PDFTextTap: No word found at position ($screenPosition)');
         
         // Only clear selection if text tool is active, otherwise allow other tools to work
-        if (_selectedTool == 'text' || _isTextEditMode) {
+        if (_selectedMode == 'text' || _isTextEditMode) {
           setState(() {
             _selectedPDFText = null;
             _selectedPDFTextObjectId = null;
@@ -2696,7 +2762,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           });
           
           // Show helpful message if text tool is active but no text found
-          if (_selectedTool == 'text') {
+          if (_selectedMode == 'text') {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
                 content: Text('No text found at this position. Tap on text to edit it.'),
@@ -2723,11 +2789,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
       print('PDFTextTap: Found word "${wordQuad.text}" at page ${wordQuad.pageIndex}');
 
-      // If highlight or underline tool is selected, create annotation automatically
-      if (_selectedTool == 'highlight' || _selectedTool == 'underline') {
-        await _createAnnotationFromTextQuad(wordQuad);
-        return;
-      }
+      // If highlight or underline tool is selected, we rely on the overlay-based
+      // drag selection to create annotations. Tapping on text is reserved for
+      // inline text editing only.
 
       // Text and objectId come directly from the MuPDF quad extraction.
       // This is the SINGLE source of truth for selection; no second lookup.
@@ -2735,7 +2799,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 
       setState(() {
         // Automatically enable text mode when text is found (even if text tool wasn't selected)
-        _selectedTool = 'text';
+        _selectedMode = 'text';
         _isTextEditMode = true;
         _isEditingMode = true;
         
@@ -3356,7 +3420,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               Navigator.pop(context);
               setState(() {
                 _isTextEditMode = false;
-                _selectedTool = 'none';
+                _selectedMode = 'none';
               });
             },
             child: const Text('Cancel'),
@@ -3408,7 +3472,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               // Reset text edit mode
               setState(() {
                 _isTextEditMode = false;
-                _selectedTool = 'none';
+                _selectedMode = 'none';
               });
             },
             child: Text(isEditing ? 'Update' : 'Add'),

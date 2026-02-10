@@ -245,8 +245,9 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     }
   }
 
-  /// Convert screen coordinates to PDF coordinates
-  /// Syncfusion PDF viewer scales PDF to fit screen width
+  /// Convert screen coordinates to PDF page coordinates (page-space)
+  /// Formula: pPage = (pScreen + scroll - pageOriginScreen) / zoom
+  /// This ensures annotations are stored in page-space and don't move with scroll/zoom
   Offset _screenToPdf(Offset screenPoint, {bool useCurrentPage = false}) {
     // Get screen size for scaling calculation
     final screenSize = widget.screenSize ?? MediaQuery.of(context).size;
@@ -256,47 +257,40 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     final renderedPdfWidth = screenSize.width;
     final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
     
-    // Account for scroll - screen position is relative to visible viewport
-    final absoluteDocumentY = screenPoint.dy + widget.scrollOffset.dy;
-    
-    // For pen drawing, always use current page to prevent vertical lines at page boundaries
-    // For other tools (like text selection), calculate page from position
+    // Calculate page origin on screen (where current page starts in viewport)
+    // For multi-page vertical scroll, each page starts at pageIndex * renderedPdfHeight
     final pageIndex = useCurrentPage 
         ? widget.currentPage 
-        : (absoluteDocumentY / renderedPdfHeight).floor();
-    final pageStartY = pageIndex * renderedPdfHeight;
-    final relativeYInPage = absoluteDocumentY - pageStartY;
+        : ((screenPoint.dy + widget.scrollOffset.dy) / renderedPdfHeight).floor();
+    final pageOriginScreen = Offset(0, pageIndex * renderedPdfHeight);
     
-    // Convert to PDF page coordinates (points, not pixels)
-    // X: screen X position maps directly to PDF X (both scale with width)
-    final pdfX = (screenPoint.dx / renderedPdfWidth) * widget.pageSize.width;
+    // Account for scroll - screen position is relative to visible viewport
+    final absoluteDocumentY = screenPoint.dy + widget.scrollOffset.dy;
+    final relativeYInPage = absoluteDocumentY - pageOriginScreen.dy;
     
-    // Y: Convert screen Y to PDF Y (both measured from bottom)
-    // Screen: Y=0 at top, Y=renderedHeight at bottom
-    // PDF: Y=0 at bottom, Y=pageHeight at top
-    // Screen Y from top = relativeYInPage
-    // Screen Y from bottom = renderedPdfHeight - relativeYInPage
-    // PDF Y from bottom = (screen Y from bottom / renderedPdfHeight) * pageSize.height
-    final screenYFromBottom = renderedPdfHeight - relativeYInPage;
-    final pdfY = (screenYFromBottom / renderedPdfHeight) * widget.pageSize.height;
+    // Convert to PDF page coordinates using proper formula:
+    // pPage = (pScreen + scroll - pageOriginScreen) / zoom
+    // Effective zoom = baseScale * widget.zoomLevel, where baseScale fits page width
+    final baseScale = renderedPdfWidth / widget.pageSize.width;
+    final effectiveZoom = baseScale * widget.zoomLevel;
+    
+    // X: Convert screen X to PDF X (accounting for zoom)
+    final pdfX = (screenPoint.dx - pageOriginScreen.dx) / effectiveZoom;
+    
+    // Y: Convert screen Y to PDF Y (accounting for zoom and Y-axis inversion)
+    // Screen: Y=0 at top, increases downward
+    // PDF: Y=0 at bottom, increases upward
+    // First convert to relative position in page, then invert Y-axis
+    final relativeYInPageNormalized = relativeYInPage / effectiveZoom;
+    final renderedPdfHeightInPageSpace = widget.pageSize.height * widget.zoomLevel;
+    final screenYFromBottom = renderedPdfHeightInPageSpace - relativeYInPageNormalized;
+    final pdfY = (screenYFromBottom / renderedPdfHeightInPageSpace) * widget.pageSize.height;
     
     // Clamp coordinates to page boundaries to prevent drawing outside the page
     final clampedX = pdfX.clamp(0.0, widget.pageSize.width);
     final clampedY = pdfY.clamp(0.0, widget.pageSize.height);
     
     return Offset(clampedX, clampedY);
-  }
-
-  /// Convert PDF coordinates to screen coordinates
-  Offset _pdfToScreen(Offset pdfPoint) {
-    // Invert Y-axis
-    final screenY = widget.pageSize.height - pdfPoint.dy;
-    
-    // Apply zoom and scroll
-    final x = pdfPoint.dx * widget.zoomLevel + widget.scrollOffset.dx;
-    final y = screenY * widget.zoomLevel + widget.scrollOffset.dy;
-    
-    return Offset(x, y);
   }
 
   /// Handle pan start (begin drawing/selection)
@@ -647,6 +641,7 @@ class _AnnotationPainter extends CustomPainter {
   final String? selectedTool;
   final Color? toolColor;
   final double? strokeWidth;
+  final bool debugVisuals = false; // toggle to true to visualize mapping
 
   _AnnotationPainter({
     required this.annotations,
@@ -663,10 +658,11 @@ class _AnnotationPainter extends CustomPainter {
     this.strokeWidth,
   });
 
-  /// Convert PDF coordinates to screen coordinates
+  /// Convert PDF page coordinates (page-space) to screen coordinates
+  /// Formula: pScreen = (pPage * zoom) + pageOriginScreen - scroll
+  /// Since Transform.translate handles scroll, this returns: (pPage * zoom) + pageOriginScreen
   /// Must match the inverse of _screenToPdf conversion
-  /// Annotations should be anchored to the page content, so they scroll with the page
-  /// @param pdfPoint: PDF coordinates (page-relative, bottom-left origin)
+  /// @param pdfPoint: PDF coordinates (page-relative, bottom-left origin, in points)
   /// @param canvasSize: Size of the canvas
   /// @param annotationPageIndex: The page index where this annotation is located
   Offset _pdfToScreen(Offset pdfPoint, Size canvasSize, int annotationPageIndex) {
@@ -678,23 +674,30 @@ class _AnnotationPainter extends CustomPainter {
     final renderedPdfWidth = screenSize.width;
     final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
     
-    // Invert Y-axis (PDF uses bottom-left origin, screen uses top-left)
-    final screenY = pageSize.height - pdfPoint.dy;
+    // Calculate page origin on screen (where this page starts in viewport)
+    final pageOriginScreen = Offset(0, annotationPageIndex * renderedPdfHeight);
     
-    // Convert PDF coordinates to screen coordinates
-    // X: PDF X maps to screen X (both scale with width)
-    final x = (pdfPoint.dx / pageSize.width) * renderedPdfWidth;
+    // Effective zoom = baseScale * zoomLevel, where baseScale fits page width
+    final baseScale = renderedPdfWidth / pageSize.width;
+    final effectiveZoom = baseScale * zoomLevel;
     
-    // Y: PDF Y maps to screen Y (accounting for page position in document)
-    // Use the annotation's actual page index, not currentPage
-    final pageStartY = annotationPageIndex * renderedPdfHeight;
-    final relativeYInPage = (screenY / pageSize.height) * renderedPdfHeight;
+    // Convert PDF Y to screen Y (accounting for Y-axis inversion)
+    // PDF: Y=0 at bottom, increases upward
+    // Screen: Y=0 at top, increases downward
+    final screenYFromBottom = pdfPoint.dy; // PDF Y is already from bottom
+    final renderedPdfHeightInPageSpace = pageSize.height * zoomLevel;
+    final relativeYInPage = (screenYFromBottom / pageSize.height) * renderedPdfHeightInPageSpace;
+    final screenYFromTop = renderedPdfHeightInPageSpace - relativeYInPage;
     
-    // Calculate absolute position in document (before scroll)
-    // The Transform.translate in build() will handle scroll offset
-    final absoluteY = pageStartY + relativeYInPage;
+    // Apply formula: pScreen = (pPage * zoom) + pageOriginScreen
+    // X: PDF X to screen X
+    final x = (pdfPoint.dx * effectiveZoom) + pageOriginScreen.dx;
     
-    return Offset(x, absoluteY);
+    // Y: PDF Y to screen Y (with Y-axis inversion)
+    final y = (screenYFromTop * effectiveZoom) + pageOriginScreen.dy;
+    
+    // The Transform.translate in build() will subtract scroll offset
+    return Offset(x, y);
   }
 
   /// Draw text quad
@@ -835,6 +838,58 @@ class _AnnotationPainter extends CustomPainter {
         );
       }
     }
+
+    // Optional debug visuals for coordinate mapping
+    if (debugVisuals) {
+      final debugPaint = Paint()
+        ..color = const Color(0xFF00E676).withOpacity(0.6)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
+
+      // Draw current page border in screen space
+      final effectiveScreenSize = this.screenSize ?? size;
+      final pdfAspectRatio = pageSize.height / pageSize.width;
+      final renderedPdfWidth = effectiveScreenSize.width;
+      final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+      final pageOriginScreen = Offset(0, currentPage * renderedPdfHeight);
+      final pageRect = Rect.fromLTWH(
+        pageOriginScreen.dx,
+        pageOriginScreen.dy,
+        renderedPdfWidth,
+        renderedPdfHeight,
+      );
+      canvas.drawRect(pageRect, debugPaint);
+
+      // Sample roundtrip for a mid-page point
+      final samplePdfPoint = Offset(pageSize.width / 2, pageSize.height / 2);
+      final sampleScreen = _pdfToScreen(samplePdfPoint, size, currentPage);
+      final roundtripBack = _screenToPdfDebug(sampleScreen, size, currentPage);
+      print('DEBUG mapping: pdf=$samplePdfPoint -> screen=$sampleScreen -> pdfBack=$roundtripBack');
+
+      // Mark the sample point
+      canvas.drawCircle(sampleScreen, 4, debugPaint..style = PaintingStyle.fill);
+    }
+  }
+
+  /// Debug helper: approximate inverse of _pdfToScreen for roundtrip logging only
+  Offset _screenToPdfDebug(Offset screenPoint, Size canvasSize, int pageIndex) {
+    final effectiveScreenSize = screenSize ?? canvasSize;
+    final pdfAspectRatio = pageSize.height / pageSize.width;
+    final renderedPdfWidth = effectiveScreenSize.width;
+    final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+
+    final pageOriginScreen = Offset(0, pageIndex * renderedPdfHeight);
+    final baseScale = renderedPdfWidth / pageSize.width;
+    final effectiveZoom = baseScale * zoomLevel;
+
+    final localX = (screenPoint.dx - pageOriginScreen.dx) / effectiveZoom;
+
+    final renderedPdfHeightInPageSpace = pageSize.height * zoomLevel;
+    final localYInPage = (screenPoint.dy - pageOriginScreen.dy) / effectiveZoom;
+    final screenYFromBottom = renderedPdfHeightInPageSpace - localYInPage;
+    final pdfY = (screenYFromBottom / renderedPdfHeightInPageSpace) * pageSize.height;
+
+    return Offset(localX, pdfY);
   }
 
   @override

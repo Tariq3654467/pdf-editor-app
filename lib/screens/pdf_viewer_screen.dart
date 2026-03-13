@@ -13,6 +13,7 @@ import 'package:path/path.dart' as path;
 import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'dart:math' as math;
 import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
@@ -31,6 +32,7 @@ import '../widgets/in_app_file_picker.dart';
 import '../widgets/text_aware_annotation_overlay.dart';
 import '../models/pdf_annotation.dart';
 import '../services/annotation_storage_service.dart';
+import 'pdf_word_editor_screen.dart';
 
 /// Active tool for the bottom annotation toolbar
 enum PdfTool { none, copy, pen, highlight, underline, eraser }
@@ -76,6 +78,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   // Error handling
   String? _errorMessage;
   String? _actualFilePath; // May differ from widget.filePath if content URI was copied
+  Uint8List? _pdfBytes; // PDF file bytes for memory-based loading (more reliable)
   Timer? _loadingTimeoutTimer;
   static const MethodChannel _fileChannel = MethodChannel('com.example.pdf_editor_app/file_intent');
   
@@ -205,6 +208,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       _selectedMode = 'none';
       _pdfViewerController.annotationMode = PdfAnnotationMode.none;
       // Reload PDF when exiting edit mode to show all saved annotations
+      _loadPDFBytes().catchError((e) {
+        print('PDFViewer: Error reloading PDF bytes: $e');
+      });
       _pdfReloadKey++;
     });
 
@@ -328,6 +334,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               setState(() {
                 _actualFilePath = tempPath;
               });
+              // Load PDF bytes for memory-based loading (more reliable)
+              _loadPDFBytes().catchError((e) {
+                print('PDFViewer: Error loading PDF bytes: $e');
+              });
               // Load PDF info in background (non-blocking)
               _loadPDFInfo().catchError((e) {
                 print('PDFViewer: Error loading PDF info: $e');
@@ -393,6 +403,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                     if (mounted) {
                       setState(() {
                         _actualFilePath = widget.filePath;
+                      });
+                      // Load PDF bytes for memory-based loading (more reliable)
+                      _loadPDFBytes().catchError((e) {
+                        print('PDFViewer: Error loading PDF bytes: $e');
                       });
                       // Load PDF info in background (non-blocking)
                       _loadPDFInfo().catchError((e) {
@@ -545,6 +559,45 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
 
+  /// Load PDF bytes for memory-based loading (more reliable than file path)
+  Future<void> _loadPDFBytes() async {
+    if (_actualFilePath == null || !mounted) return;
+    
+    try {
+      final file = File(_actualFilePath!);
+      
+      // Check existence with timeout
+      final exists = await file.exists()
+          .timeout(const Duration(seconds: 2))
+          .catchError((e) {
+            print('PDFViewer: Error checking file for bytes: $e');
+            return false;
+          });
+          
+      if (exists) {
+        // Read PDF bytes with timeout
+        final bytes = await file.readAsBytes()
+            .timeout(const Duration(seconds: 10))
+            .catchError((e) {
+              print('PDFViewer: Error reading PDF bytes: $e');
+              return null;
+            });
+            
+        if (bytes != null && mounted) {
+          setState(() {
+            _pdfBytes = bytes;
+          });
+          print('PDFViewer: Loaded PDF bytes: ${bytes.length} bytes');
+        } else {
+          print('PDFViewer: Failed to read PDF bytes');
+        }
+      }
+    } catch (e) {
+      print('PDFViewer: Error loading PDF bytes: $e');
+      // Don't set error message here - let file-based loading try as fallback
+    }
+  }
+
   Future<void> _loadPDFInfo() async {
     if (_actualFilePath == null || !mounted) return;
     
@@ -682,14 +735,73 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
   
   void _onDocumentLoadFailed(PdfDocumentLoadFailedDetails details) {
-    print('PDFViewer: Document load failed: ${details.error}');
+    final error = details.error;
+    final errorMessage = error?.toString() ?? 'Unknown error';
+    print('PDFViewer: Document load failed: $errorMessage');
+    print('PDFViewer: Error type: ${error.runtimeType}');
+    if (error is Exception) {
+      print('PDFViewer: Exception details: ${error.toString()}');
+    }
     _loadingTimeoutTimer?.cancel();
     if (mounted) {
       setState(() {
         _isLoading = false;
-        _errorMessage = 'Failed to load PDF: ${details.error}\n\nThe file might be corrupted or in an unsupported format.';
+        _errorMessage = 'Failed to load PDF: $errorMessage\n\nThe file might be corrupted or in an unsupported format.';
       });
     }
+  }
+
+  /// Build blue bounding box overlay for selected text (Sejda-style)
+  Widget _buildTextSelectionBox() {
+    if (_selectedPDFText == null || _pdfPageSize == null) {
+      return const SizedBox.shrink();
+    }
+
+    // Convert PDF bounds to screen coordinates
+    final screenSize = MediaQuery.of(context).size;
+    final pageSize = _pdfPageSize!;
+    
+    // Calculate rendered PDF dimensions
+    final pdfAspectRatio = pageSize.height / pageSize.width;
+    final renderedPdfWidth = screenSize.width;
+    final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    
+    // Get PDF bounds
+    final pdfBounds = _selectedPDFText!.bounds;
+    
+    // Convert PDF coordinates to screen coordinates
+    // PDF uses bottom-left origin, screen uses top-left
+    final screenX = (pdfBounds.left / pageSize.width) * renderedPdfWidth;
+    // PDF Y is from bottom, screen Y is from top
+    final pdfYFromBottom = pdfBounds.top; // Top of bounds in PDF coordinates
+    final screenYFromTop = renderedPdfHeight - (pdfYFromBottom / pageSize.height) * renderedPdfHeight;
+    
+    // Account for page offset in continuous scroll mode
+    final pageIndex = _selectedPDFText!.pageIndex;
+    final pageStartY = pageIndex * renderedPdfHeight;
+    final adjustedScreenY = pageStartY + screenYFromTop - _pdfScrollOffset;
+    
+    // Calculate width and height in screen coordinates
+    final screenWidth = (pdfBounds.width / pageSize.width) * renderedPdfWidth;
+    final screenHeight = (pdfBounds.height / pageSize.height) * renderedPdfHeight;
+    
+    return Positioned(
+      left: screenX.clamp(0.0, screenSize.width),
+      top: adjustedScreenY.clamp(0.0, screenSize.height),
+      child: IgnorePointer(
+        child: Container(
+          width: screenWidth,
+          height: screenHeight,
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: const Color(0xFF2196F3), // Blue color like in screenshot
+              width: 2.0,
+            ),
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildPDFViewer() {
@@ -809,9 +921,6 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     
     print('PDFViewer: Building PDF viewer...');
     
-    // Create File object - don't check existence here (already checked in _initializePDF)
-    final file = File(filePath);
-    
     // Wrap PDF viewer in RepaintBoundary to prevent full-screen repaints
     // Use LayoutBuilder so we get the ACTUAL PDF viewer size (not full screen)
     final pdfViewer = RepaintBoundary(
@@ -819,13 +928,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         builder: (context, constraints) {
           final viewerSize = constraints.biggest;
           
-          // Inline text editing is disabled; we still wrap in GestureDetector to keep
-          // the structure, but we don't intercept taps for text editing anymore.
-          return GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            child: SfPdfViewer.file(
-              file,
-              key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
+          // Use memory-based loading if bytes are available (more reliable)
+          // Otherwise fall back to file-based loading
+          Widget viewer;
+          if (_pdfBytes != null) {
+            print('PDFViewer: Using memory-based loading (${_pdfBytes!.length} bytes)');
+            viewer = SfPdfViewer.memory(
+              _pdfBytes!,
+              key: ValueKey('pdf_viewer_memory_${filePath}_$_viewMode$_pdfReloadKey'),
               controller: _pdfViewerController,
               onDocumentLoaded: _onDocumentLoaded,
               onDocumentLoadFailed: _onDocumentLoadFailed,
@@ -834,7 +944,35 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               pageLayoutMode: _getPageLayoutMode(),
               enableDoubleTapZooming: true,
               enableTextSelection: true,
-            ),
+            );
+          } else {
+            print('PDFViewer: Using file-based loading (fallback)');
+            final file = File(filePath);
+            viewer = SfPdfViewer.file(
+              file,
+              key: ValueKey('pdf_viewer_file_${filePath}_$_viewMode$_pdfReloadKey'),
+              controller: _pdfViewerController,
+              onDocumentLoaded: _onDocumentLoaded,
+              onDocumentLoadFailed: _onDocumentLoadFailed,
+              onPageChanged: _onPageChanged,
+              scrollDirection: _getScrollDirection(),
+              pageLayoutMode: _getPageLayoutMode(),
+              enableDoubleTapZooming: true,
+              enableTextSelection: true,
+            );
+          }
+          
+          // Enable text editing on tap (Sejda-style: tap on text to edit)
+          // Only intercept taps when not in drawing mode
+          return GestureDetector(
+            behavior: HitTestBehavior.translucent,
+            onTapDown: (details) {
+              // Only try to detect text if not in drawing mode
+              if (!_isEditingMode || _selectedMode == 'none' || _selectedMode == 'text') {
+                _handleTextEditTap(details.localPosition);
+              }
+            },
+            child: viewer,
           );
         },
       ),
@@ -1098,6 +1236,16 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             ),
             onPressed: _showViewModeBottomSheet,
           ),
+          // Edit button - Convert to Word format for editing
+          IconButton(
+            icon: Icon(
+              Icons.edit_document,
+              color: iconColor,
+              size: 24,
+            ),
+            onPressed: _showEditOptions,
+            tooltip: 'Edit PDF Text',
+          ),
           IconButton(
             icon: Icon(
               Icons.more_vert,
@@ -1189,6 +1337,9 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             child: _buildPDFViewer(),
             ),
           ),
+          // Blue bounding box overlay for selected text (Sejda-style)
+          if (_selectedPDFText != null && _selectedPDFText!.pageIndex == _currentPage - 1)
+            _buildTextSelectionBox(),
           // Text formatting toolbar (appears when text is selected - Sejda-style)
           // Positioned at bottom to always be visible and accessible
           if (_showTextFormattingToolbar && _selectedPDFText != null)
@@ -2276,6 +2427,120 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     );
   }
 
+  void _showEditOptions() {
+    showModalBottomSheet(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.edit_note),
+              title: const Text('Edit inside PDF'),
+              subtitle: const Text('Tap existing text to edit, or empty space to add text'),
+              onTap: () {
+                Navigator.pop(context);
+                _enableInlineTextEditingMode();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.description_outlined),
+              title: const Text('Full text editor'),
+              subtitle: const Text('Edit all text while keeping the original PDF layout'),
+              onTap: () {
+                Navigator.pop(context);
+                _openWordEditor();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _enableInlineTextEditingMode() {
+    setState(() {
+      _isEditingMode = true;
+      _selectedTool = PdfTool.none;
+      _selectedMode = 'text';
+      _isTextEditMode = true;
+      _selectedPDFText = null;
+      _selectedPDFTextObjectId = null;
+      _showTextFormattingToolbar = false;
+      _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Tap text to edit it, or tap an empty spot to add new text.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Open Word editor for full document text editing
+  Future<void> _openWordEditor() async {
+    try {
+      final pdfPath = _actualFilePath ?? widget.filePath;
+      
+      // Show loading dialog
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (context) => const Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+      
+      // Navigate to Word editor screen
+      final result = await Navigator.push<String>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => PDFWordEditorScreen(
+            pdfPath: pdfPath,
+            pdfFileName: widget.fileName,
+          ),
+        ),
+      );
+      
+      // Close loading dialog
+      if (mounted) {
+        Navigator.pop(context);
+      }
+      
+      // If a new PDF was created, reload it
+      if (result != null && mounted) {
+        // Check if the new PDF exists
+        final newFile = File(result);
+        if (await newFile.exists()) {
+          // Reload PDF bytes
+          setState(() {
+            _actualFilePath = result;
+            _pdfReloadKey++;
+          });
+          await _loadPDFBytes();
+          
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('PDF updated successfully!'),
+              backgroundColor: Colors.green,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error opening editor: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   Future<void> _handleTextEditTap(Offset position) async {
     // Allow text editing even if text tool wasn't explicitly selected
     // This makes it more intuitive - just tap on text to edit
@@ -2619,6 +2884,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             _pdfReloadDebounceTimer?.cancel();
             _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 800), () {
               if (mounted) {
+                // Reload PDF bytes after modification
+                _loadPDFBytes().catchError((e) {
+                  print('PDFViewer: Error reloading PDF bytes: $e');
+                });
                 setState(() {
                   _pdfReloadKey++; // Force PDF viewer to reload
                 });
@@ -2753,23 +3022,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         // No word found at this position
         print('PDFTextTap: No word found at position ($screenPosition)');
         
-        // Only clear selection if text tool is active, otherwise allow other tools to work
+        // In explicit text-edit mode, tapping empty space adds new text.
         if (_selectedMode == 'text' || _isTextEditMode) {
           setState(() {
             _selectedPDFText = null;
             _selectedPDFTextObjectId = null;
             _showTextFormattingToolbar = false;
           });
-          
-          // Show helpful message if text tool is active but no text found
-          if (_selectedMode == 'text') {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text('No text found at this position. Tap on text to edit it.'),
-                duration: Duration(seconds: 2),
-              ),
-            );
-          }
+
+          _showTextEditDialog(
+            initialText: '',
+            position: screenPosition,
+            isEditing: false,
+          );
+          return;
         }
         return;
       }
@@ -3013,7 +3279,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   /// Save text content to PDF (called when user clicks "Done")
   /// Optimized with immediate UI feedback and async save
   Future<void> _saveTextContent() async {
-    if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
+    if (_selectedPDFText == null) return;
     if (_isSavingText) return; // Prevent multiple simultaneous saves
     
     // Cancel any pending preview updates
@@ -3035,6 +3301,47 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       }
     }
   }
+
+  Future<bool> _tryReplaceTextWithMuPdf(String newText) async {
+    if (_selectedPDFText == null ||
+        _selectedPDFTextObjectId == null ||
+        _selectedPDFTextObjectId!.isEmpty) {
+      return false;
+    }
+
+    try {
+      final pdfPath = _actualFilePath ?? widget.filePath;
+      final file = File(pdfPath);
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final beforeBytes = await file.readAsBytes();
+      final replaceSuccess = await MuPDFEditorService.replaceText(
+        pdfPath,
+        _selectedPDFText!.pageIndex,
+        _selectedPDFTextObjectId!,
+        newText,
+      );
+
+      if (!replaceSuccess) {
+        return false;
+      }
+
+      await MuPDFEditorService.savePdf(pdfPath);
+      final afterBytes = await file.readAsBytes();
+      final fileChanged = !listEquals(beforeBytes, afterBytes);
+
+      if (!fileChanged) {
+        print('_tryReplaceTextWithMuPdf: Native edit reported success but file did not change');
+      }
+
+      return fileChanged;
+    } catch (e) {
+      print('_tryReplaceTextWithMuPdf: $e');
+      return false;
+    }
+  }
   
   /// Save text content change to PDF (background operation)
   /// Optimized with faster reload and better error handling
@@ -3052,7 +3359,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Text editing failed. This PDF may not support inline editing. Try using "Extract All Text" for full document editing.'),
+              content: Text('Text editing failed here. Try the full text editor to update the document while keeping its layout.'),
               backgroundColor: Colors.orange,
               duration: Duration(seconds: 4),
             ),
@@ -3063,29 +3370,17 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
     
     try {
-      final pdfPath = _actualFilePath ?? widget.filePath;
       final pageIndex = _selectedPDFText!.pageIndex;
       
       print('_saveTextChangeToPDF: Attempting to replace text with objectId: ${_selectedPDFTextObjectId}');
-      
-      // Try MuPDF first (faster than Syncfusion)
-      bool success = await MuPDFEditorService.replaceText(
-        pdfPath,
-        pageIndex,
-        _selectedPDFTextObjectId!,
-        newText,
-      );
-      
-      if (success) {
-        print('_saveTextChangeToPDF: MuPDF replacement successful, saving PDF');
-        // Save PDF (optimized - MuPDF is faster)
-        final saveSuccess = await MuPDFEditorService.savePdf(pdfPath);
-        if (!saveSuccess) {
-          print('_saveTextChangeToPDF: Warning - MuPDF save returned false');
-        }
-      } else {
-        // Fallback to Syncfusion if MuPDF fails
-        print('_saveTextChangeToPDF: MuPDF text replacement failed, trying Syncfusion fallback');
+
+      bool success = false;
+      if (_selectedPDFTextObjectId != null && _selectedPDFTextObjectId!.isNotEmpty) {
+        success = await _tryReplaceTextWithMuPdf(newText);
+      }
+
+      if (!success) {
+        print('_saveTextChangeToPDF: Using Syncfusion fallback for visible PDF text update');
         success = await _replaceTextWithSyncfusion(newText);
       }
       
@@ -3103,6 +3398,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           // Reload PDF after minimal delay
           _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 200), () {
             if (mounted) {
+              // Reload PDF bytes after modification
+              _loadPDFBytes().catchError((e) {
+                print('PDFViewer: Error reloading PDF bytes: $e');
+              });
               setState(() {
                 _pdfReloadKey++; // Force PDF viewer to reload
               });
@@ -3154,6 +3453,8 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   /// Fallback: Replace text using Syncfusion (works but less precise)
   Future<bool> _replaceTextWithSyncfusion(String newText) async {
     try {
+      if (_selectedPDFText == null) return false;
+
       final file = File(_actualFilePath ?? widget.filePath);
       final bytes = await file.readAsBytes();
       final document = sf.PdfDocument(inputBytes: bytes);
@@ -3161,23 +3462,58 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       if (_selectedPDFText!.pageIndex >= 0 && _selectedPDFText!.pageIndex < document.pages.count) {
         final page = document.pages[_selectedPDFText!.pageIndex];
         final graphics = page.graphics;
+        final pageSize = page.size;
         
-        // Draw white rectangle to "erase" old text
+        // Draw white rectangle to "erase" old text before redrawing.
         final bounds = _selectedPDFText!.bounds;
+        final lineCount = '\n'.allMatches(newText).length + 1;
+        final fontSize = _selectedPDFText!.fontSize.clamp(8.0, 72.0);
+        final redrawWidth = (pageSize.width - bounds.left - 16).clamp(
+          bounds.width + 12,
+          pageSize.width,
+        );
+        final redrawHeight = math.max(
+          bounds.height + 12,
+          (fontSize * 1.4 * lineCount) + 12,
+        );
+        final redrawBounds = Rect.fromLTWH(
+          bounds.left,
+          bounds.top,
+          redrawWidth,
+          redrawHeight,
+        );
+
         graphics.drawRectangle(
           brush: sf.PdfSolidBrush(sf.PdfColor(255, 255, 255)),
-          bounds: Rect.fromLTWH(
-            bounds.left,
-            bounds.top,
-            bounds.width,
-            bounds.height,
-          ),
+          bounds: redrawBounds,
         );
-        
-        // Draw new text at same position
+
+        if (newText.trim().isEmpty) {
+          final modifiedBytes = await document.save();
+          await file.writeAsBytes(modifiedBytes);
+          document.dispose();
+          return true;
+        }
+
+        // Draw replacement text at the same position using current toolbar styling.
+        sf.PdfFontFamily fontFamily = sf.PdfFontFamily.helvetica;
+        final selectedFont = _selectedPDFText!.fontFamily?.toLowerCase();
+        if (selectedFont != null) {
+          if (selectedFont.contains('times')) {
+            fontFamily = sf.PdfFontFamily.timesRoman;
+          } else if (selectedFont.contains('courier')) {
+            fontFamily = sf.PdfFontFamily.courier;
+          }
+        }
+
         final font = sf.PdfStandardFont(
-          sf.PdfFontFamily.helvetica,
-          _selectedPDFText!.fontSize,
+          fontFamily,
+          fontSize,
+          style: _selectedPDFText!.isBold
+              ? sf.PdfFontStyle.bold
+              : (_selectedPDFText!.isItalic
+                  ? sf.PdfFontStyle.italic
+                  : sf.PdfFontStyle.regular),
         );
         final brush = sf.PdfSolidBrush(sf.PdfColor(
           _selectedPDFText!.color.red,
@@ -3188,18 +3524,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         final stringFormat = sf.PdfStringFormat();
         stringFormat.alignment = sf.PdfTextAlignment.left;
         stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+        stringFormat.wordWrap = sf.PdfWordWrapType.word;
         
         graphics.drawString(
           newText,
           font,
           brush: brush,
           format: stringFormat,
-          bounds: Rect.fromLTWH(
-            bounds.left,
-            bounds.top,
-            bounds.width,
-            bounds.height + 20, // Allow for text expansion
-          ),
+          bounds: redrawBounds,
         );
         
         // Save PDF
@@ -3307,6 +3639,10 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           _pdfReloadDebounceTimer?.cancel();
           _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 500), () {
             if (mounted) {
+              // Reload PDF bytes after modification
+              _loadPDFBytes().catchError((e) {
+                print('PDFViewer: Error reloading PDF bytes: $e');
+              });
               setState(() {
                 _pdfReloadKey++; // Force PDF viewer to reload
               });
@@ -3322,7 +3658,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   
   /// Delete selected text using MuPDF
   Future<void> _deleteSelectedText() async {
-    if (_selectedPDFText == null || _selectedPDFTextObjectId == null) return;
+    if (_selectedPDFText == null) return;
     
     try {
       // Show loading
@@ -3334,33 +3670,36 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         ),
       );
       
-      // Replace text with empty string (effectively deletes it)
-      final pdfPath = _actualFilePath ?? widget.filePath;
-      final success = await MuPDFEditorService.replaceText(
-        pdfPath,
-        _selectedPDFText!.pageIndex,
-        _selectedPDFTextObjectId!,
-        '', // Empty string = delete
-      );
-      
-      // Save PDF after modification
-      if (success) {
-        final saveSuccess = await MuPDFEditorService.savePdf(pdfPath);
-        if (!saveSuccess) {
-          print('Warning: Text deleted but save failed');
-        }
+      bool success = false;
+
+      if (_selectedPDFTextObjectId != null && _selectedPDFTextObjectId!.isNotEmpty) {
+        success = await _tryReplaceTextWithMuPdf('');
+      }
+
+      if (!success) {
+        success = await _replaceTextWithSyncfusion('');
       }
       
       if (mounted) {
         Navigator.pop(context);
         
         if (success) {
+          _pdfReloadDebounceTimer?.cancel();
+          _pdfReloadDebounceTimer = Timer(const Duration(milliseconds: 200), () {
+            if (mounted) {
+              _loadPDFBytes().catchError((e) {
+                print('PDFViewer: Error reloading PDF bytes: $e');
+              });
+              setState(() {
+                _pdfReloadKey++;
+              });
+            }
+          });
+
           setState(() {
             _selectedPDFText = null;
             _selectedPDFTextObjectId = null;
             _showTextFormattingToolbar = false;
-            // Don't reload PDF immediately - it causes hangs
-            // Changes will be visible when PDF is reopened or when exiting edit mode
           });
           
           ScaffoldMessenger.of(context).showSnackBar(

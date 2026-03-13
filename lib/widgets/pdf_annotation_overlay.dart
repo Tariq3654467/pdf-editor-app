@@ -30,6 +30,7 @@ class AnnotationPoint {
   final String toolType; // 'pen', 'highlight', 'underline'
   final int pageNumber; // Page number this annotation belongs to
   final Offset normalizedPoint; // Normalized coordinates (0-1 range) relative to overlay
+  final double? documentY; // Absolute Y position in document (for scroll-aware positioning)
 
   AnnotationPoint({
     required this.point,
@@ -39,6 +40,7 @@ class AnnotationPoint {
     this.toolType = 'pen',
     required this.pageNumber,
     required this.normalizedPoint,
+    this.documentY,
   });
 }
 

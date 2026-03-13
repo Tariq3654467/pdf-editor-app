@@ -5,8 +5,8 @@ import 'package:syncfusion_flutter_pdf/pdf.dart' as sf;
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as path;
 
-/// Service for true PDF content editing (not just annotations)
-/// Edits actual PDF content streams, matching Sejda's behavior
+/// Service for comprehensive PDF content editing using syncfusion_flutter_pdf
+/// Provides text editing, image insertion, formatting, and more
 class PDFContentEditorService {
   /// Extract text elements from PDF page for editing
   static Future<List<PDFTextElement>> extractTextElements(
@@ -59,11 +59,151 @@ class PDFContentEditorService {
     }
   }
 
+  /// Add text to PDF at a specific position
+  /// This is a convenience method for adding new text
+  static Future<bool> addText(
+    String filePath,
+    String text,
+    int pageIndex,
+    Offset position, {
+    double fontSize = 12.0,
+    Color color = Colors.black,
+    sf.PdfFontFamily fontFamily = sf.PdfFontFamily.helvetica,
+    bool isBold = false,
+    bool isItalic = false,
+    sf.PdfTextAlignment alignment = sf.PdfTextAlignment.left,
+    String? outputPath,
+  }) async {
+    try {
+      final element = PDFTextElement(
+        id: 'text_${DateTime.now().millisecondsSinceEpoch}',
+        text: text,
+        bounds: Rect.fromLTWH(
+          position.dx,
+          position.dy,
+          200, // Default width
+          fontSize * 1.4, // Default height based on font size
+        ),
+        pageIndex: pageIndex,
+        fontSize: fontSize,
+        color: color,
+        fontFamily: _fontFamilyToString(fontFamily),
+        isBold: isBold,
+        isItalic: isItalic,
+        alignment: alignment,
+      );
+
+      return await addOrUpdateTextElement(
+        filePath,
+        element,
+        outputPath: outputPath,
+      );
+    } catch (e) {
+      print('Error adding text: $e');
+      return false;
+    }
+  }
+
+  /// Replace existing text in PDF
+  /// Erases old text by drawing white rectangle, then draws new text
+  static Future<bool> replaceText(
+    String filePath,
+    String oldText,
+    String newText,
+    int pageIndex,
+    Rect oldTextBounds, {
+    double? fontSize,
+    Color? color,
+    sf.PdfFontFamily? fontFamily,
+    bool? isBold,
+    bool? isItalic,
+    sf.PdfTextAlignment? alignment,
+    String? outputPath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+
+      if (pageIndex < 0 || pageIndex >= document.pages.count) {
+        document.dispose();
+        return false;
+      }
+
+      final page = document.pages[pageIndex];
+      final graphics = page.graphics;
+      final pageSize = page.size;
+
+      // Erase old text by drawing white rectangle
+      final whiteBrush = sf.PdfSolidBrush(sf.PdfColor(255, 255, 255));
+      final eraseBounds = Rect.fromLTWH(
+        oldTextBounds.left.clamp(0.0, pageSize.width),
+        oldTextBounds.top.clamp(0.0, pageSize.height),
+        oldTextBounds.width.clamp(0.0, pageSize.width - oldTextBounds.left),
+        oldTextBounds.height.clamp(0.0, pageSize.height - oldTextBounds.top),
+      );
+      graphics.drawRectangle(
+        brush: whiteBrush,
+        bounds: eraseBounds,
+      );
+
+      // Draw new text at the same position
+      final finalFontSize = fontSize ?? 12.0;
+      final finalColor = color ?? Colors.black;
+      final finalFontFamily = fontFamily ?? sf.PdfFontFamily.helvetica;
+      final finalIsBold = isBold ?? false;
+      final finalIsItalic = isItalic ?? false;
+      final finalAlignment = alignment ?? sf.PdfTextAlignment.left;
+
+      final font = sf.PdfStandardFont(
+        finalFontFamily,
+        finalFontSize,
+        style: _getFontStyle(finalIsBold, finalIsItalic),
+      );
+
+      final brush = sf.PdfSolidBrush(sf.PdfColor(
+        finalColor.red,
+        finalColor.green,
+        finalColor.blue,
+      ));
+
+      final stringFormat = sf.PdfStringFormat();
+      stringFormat.alignment = finalAlignment;
+      stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+      stringFormat.wordWrap = sf.PdfWordWrapType.word;
+
+      graphics.drawString(
+        newText,
+        font,
+        brush: brush,
+        format: stringFormat,
+        bounds: eraseBounds,
+      );
+
+      // Save modified PDF
+      final modifiedBytes = await document.save();
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
+      document.dispose();
+
+      return true;
+    } catch (e) {
+      print('Error replacing text: $e');
+      return false;
+    }
+  }
+
   /// Add or update text element in PDF
   static Future<bool> addOrUpdateTextElement(
     String filePath,
-    PDFTextElement element,
-  ) async {
+    PDFTextElement element, {
+    String? outputPath,
+  }) async {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
@@ -90,10 +230,12 @@ class PDFContentEditorService {
         element.bounds.height.clamp(0.0, pageSize.height - element.bounds.top),
       );
 
-      // Create font
+      // Create font with style
+      final fontFamily = _stringToFontFamily(element.fontFamily) ?? sf.PdfFontFamily.helvetica;
       final font = sf.PdfStandardFont(
-        sf.PdfFontFamily.helvetica,
+        fontFamily,
         element.fontSize,
+        style: _getFontStyle(element.isBold, element.isItalic),
       );
 
       // Create brush
@@ -104,10 +246,11 @@ class PDFContentEditorService {
         textColor.blue,
       ));
 
-      // Draw text
+      // Draw text with alignment
       final stringFormat = sf.PdfStringFormat();
-      stringFormat.alignment = sf.PdfTextAlignment.left;
+      stringFormat.alignment = element.alignment ?? sf.PdfTextAlignment.left;
       stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+      stringFormat.wordWrap = sf.PdfWordWrapType.word;
 
       graphics.drawString(
         element.text,
@@ -119,7 +262,9 @@ class PDFContentEditorService {
 
       // Save modified PDF
       final modifiedBytes = await document.save();
-      await file.writeAsBytes(modifiedBytes);
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
       document.dispose();
 
       return true;
@@ -129,12 +274,14 @@ class PDFContentEditorService {
     }
   }
 
-  /// Remove text element from PDF
+  /// Remove text element from PDF by erasing with white rectangle
   static Future<bool> removeTextElement(
     String filePath,
     String elementId,
     int pageIndex,
-  ) async {
+    Rect bounds, {
+    String? outputPath,
+  }) async {
     // Note: Removing text from PDF is complex - requires content stream manipulation
     // For now, we'll overlay white rectangle to "erase" text
     try {
@@ -153,18 +300,27 @@ class PDFContentEditorService {
 
       final page = document.pages[pageIndex];
       final graphics = page.graphics;
+      final pageSize = page.size;
 
       // Draw white rectangle to cover text (simplified approach)
       // In a full implementation, you'd parse and remove the actual text objects
       final whiteBrush = sf.PdfSolidBrush(sf.PdfColor(255, 255, 255));
+      final eraseBounds = Rect.fromLTWH(
+        bounds.left.clamp(0.0, pageSize.width),
+        bounds.top.clamp(0.0, pageSize.height),
+        bounds.width.clamp(0.0, pageSize.width - bounds.left),
+        bounds.height.clamp(0.0, pageSize.height - bounds.top),
+      );
       graphics.drawRectangle(
         brush: whiteBrush,
-        bounds: Rect.fromLTWH(0, 0, page.size.width, page.size.height),
+        bounds: eraseBounds,
       );
 
       // Save modified PDF
       final modifiedBytes = await document.save();
-      await file.writeAsBytes(modifiedBytes);
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
       document.dispose();
 
       return true;
@@ -177,8 +333,9 @@ class PDFContentEditorService {
   /// Add image to PDF
   static Future<bool> addImageToPDF(
     String filePath,
-    PDFImageElement element,
-  ) async {
+    PDFImageElement element, {
+    String? outputPath,
+  }) async {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
@@ -223,7 +380,9 @@ class PDFContentEditorService {
 
       // Save modified PDF
       final modifiedBytes = await document.save();
-      await file.writeAsBytes(modifiedBytes);
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
       document.dispose();
 
       return true;
@@ -233,12 +392,69 @@ class PDFContentEditorService {
     }
   }
 
+  /// Add image from bytes to PDF
+  static Future<bool> addImageFromBytes(
+    String filePath,
+    Uint8List imageBytes,
+    int pageIndex,
+    Rect bounds, {
+    String? outputPath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+
+      if (pageIndex < 0 || pageIndex >= document.pages.count) {
+        document.dispose();
+        return false;
+      }
+
+      final page = document.pages[pageIndex];
+      final graphics = page.graphics;
+      final pageSize = page.size;
+
+      final pdfImage = sf.PdfBitmap(imageBytes);
+
+      // Clamp bounds to page
+      final imageBounds = Rect.fromLTWH(
+        bounds.left.clamp(0.0, pageSize.width),
+        bounds.top.clamp(0.0, pageSize.height),
+        bounds.width.clamp(0.0, pageSize.width - bounds.left),
+        bounds.height.clamp(0.0, pageSize.height - bounds.top),
+      );
+
+      // Draw image
+      graphics.drawImage(
+        pdfImage,
+        imageBounds,
+      );
+
+      // Save modified PDF
+      final modifiedBytes = await document.save();
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
+      document.dispose();
+
+      return true;
+    } catch (e) {
+      print('Error adding image from bytes: $e');
+      return false;
+    }
+  }
+
   /// Save all edits to PDF (batch operation)
   static Future<bool> saveAllEdits(
     String filePath,
     List<PDFTextElement> textElements,
-    List<PDFImageElement> imageElements,
-  ) async {
+    List<PDFImageElement> imageElements, {
+    String? outputPath,
+  }) async {
     try {
       final file = File(filePath);
       if (!await file.exists()) {
@@ -269,9 +485,11 @@ class PDFContentEditorService {
         // Add text elements
         final pageTexts = textByPage[pageIndex] ?? [];
         for (var element in pageTexts) {
+          final fontFamily = _stringToFontFamily(element.fontFamily) ?? sf.PdfFontFamily.helvetica;
           final font = sf.PdfStandardFont(
-            sf.PdfFontFamily.helvetica,
+            fontFamily,
             element.fontSize,
+            style: _getFontStyle(element.isBold, element.isItalic),
           );
 
           final textColor = element.color;
@@ -282,8 +500,9 @@ class PDFContentEditorService {
           ));
 
           final stringFormat = sf.PdfStringFormat();
-          stringFormat.alignment = sf.PdfTextAlignment.left;
+          stringFormat.alignment = element.alignment ?? sf.PdfTextAlignment.left;
           stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+          stringFormat.wordWrap = sf.PdfWordWrapType.word;
 
           final bounds = Rect.fromLTWH(
             element.bounds.left.clamp(0.0, pageSize.width),
@@ -327,7 +546,9 @@ class PDFContentEditorService {
 
       // Save modified PDF
       final modifiedBytes = await document.save();
-      await file.writeAsBytes(modifiedBytes);
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
       document.dispose();
 
       return true;
@@ -364,6 +585,115 @@ class PDFContentEditorService {
       return null;
     }
   }
+
+  /// Draw rectangle on PDF (useful for highlighting or erasing)
+  static Future<bool> drawRectangle(
+    String filePath,
+    int pageIndex,
+    Rect bounds, {
+    Color? fillColor,
+    Color? strokeColor,
+    double strokeWidth = 1.0,
+    String? outputPath,
+  }) async {
+    try {
+      final file = File(filePath);
+      if (!await file.exists()) {
+        return false;
+      }
+
+      final bytes = await file.readAsBytes();
+      final document = sf.PdfDocument(inputBytes: bytes);
+
+      if (pageIndex < 0 || pageIndex >= document.pages.count) {
+        document.dispose();
+        return false;
+      }
+
+      final page = document.pages[pageIndex];
+      final graphics = page.graphics;
+      final pageSize = page.size;
+
+      final rectBounds = Rect.fromLTWH(
+        bounds.left.clamp(0.0, pageSize.width),
+        bounds.top.clamp(0.0, pageSize.height),
+        bounds.width.clamp(0.0, pageSize.width - bounds.left),
+        bounds.height.clamp(0.0, pageSize.height - bounds.top),
+      );
+
+      if (fillColor != null) {
+        final brush = sf.PdfSolidBrush(sf.PdfColor(
+          fillColor.red,
+          fillColor.green,
+          fillColor.blue,
+        ));
+        graphics.drawRectangle(
+          brush: brush,
+          bounds: rectBounds,
+        );
+      }
+
+      if (strokeColor != null) {
+        final pen = sf.PdfPen(
+          sf.PdfColor(
+            strokeColor.red,
+            strokeColor.green,
+            strokeColor.blue,
+          ),
+          width: strokeWidth,
+        );
+        graphics.drawRectangle(
+          pen: pen,
+          bounds: rectBounds,
+        );
+      }
+
+      // Save modified PDF
+      final modifiedBytes = await document.save();
+      final targetPath = outputPath ?? filePath;
+      final targetFile = File(targetPath);
+      await targetFile.writeAsBytes(modifiedBytes);
+      document.dispose();
+
+      return true;
+    } catch (e) {
+      print('Error drawing rectangle: $e');
+      return false;
+    }
+  }
+
+  /// Helper methods
+  static sf.PdfFontStyle _getFontStyle(bool isBold, bool isItalic) {
+    if (isBold) {
+      return sf.PdfFontStyle.bold;
+    } else if (isItalic) {
+      return sf.PdfFontStyle.italic;
+    } else {
+      return sf.PdfFontStyle.regular;
+    }
+  }
+
+  static String _fontFamilyToString(sf.PdfFontFamily family) {
+    switch (family) {
+      case sf.PdfFontFamily.helvetica:
+        return 'helvetica';
+      case sf.PdfFontFamily.timesRoman:
+        return 'timesRoman';
+      case sf.PdfFontFamily.courier:
+        return 'courier';
+      default:
+        return 'helvetica';
+    }
+  }
+
+  static sf.PdfFontFamily? _stringToFontFamily(String? familyStr) {
+    if (familyStr == null) return null;
+    final lower = familyStr.toLowerCase();
+    if (lower.contains('helvetica')) return sf.PdfFontFamily.helvetica;
+    if (lower.contains('times') || lower.contains('roman')) return sf.PdfFontFamily.timesRoman;
+    if (lower.contains('courier')) return sf.PdfFontFamily.courier;
+    return sf.PdfFontFamily.helvetica;
+  }
 }
 
 /// Represents a text element in PDF (for editing)
@@ -377,6 +707,7 @@ class PDFTextElement {
   final String? fontFamily;
   final bool isBold;
   final bool isItalic;
+  final sf.PdfTextAlignment? alignment;
 
   PDFTextElement({
     required this.id,
@@ -388,6 +719,7 @@ class PDFTextElement {
     this.fontFamily,
     this.isBold = false,
     this.isItalic = false,
+    this.alignment,
   });
 
   PDFTextElement copyWith({
@@ -400,6 +732,7 @@ class PDFTextElement {
     String? fontFamily,
     bool? isBold,
     bool? isItalic,
+    sf.PdfTextAlignment? alignment,
   }) {
     return PDFTextElement(
       id: id ?? this.id,
@@ -411,6 +744,7 @@ class PDFTextElement {
       fontFamily: fontFamily ?? this.fontFamily,
       isBold: isBold ?? this.isBold,
       isItalic: isItalic ?? this.isItalic,
+      alignment: alignment ?? this.alignment,
     );
   }
 
@@ -435,6 +769,7 @@ class PDFTextElement {
       'fontFamily': fontFamily,
       'isBold': isBold,
       'isItalic': isItalic,
+      'alignment': alignment?.toString(),
     };
   }
 
@@ -459,7 +794,18 @@ class PDFTextElement {
       fontFamily: map['fontFamily'] as String?,
       isBold: map['isBold'] as bool? ?? false,
       isItalic: map['isItalic'] as bool? ?? false,
+      alignment: _parseAlignment(map['alignment'] as String?),
     );
+  }
+
+  static sf.PdfTextAlignment? _parseAlignment(String? alignmentStr) {
+    if (alignmentStr == null) return null;
+    final str = alignmentStr.toLowerCase();
+    if (str.contains('left')) return sf.PdfTextAlignment.left;
+    if (str.contains('center')) return sf.PdfTextAlignment.center;
+    if (str.contains('right')) return sf.PdfTextAlignment.right;
+    if (str.contains('justify')) return sf.PdfTextAlignment.justify;
+    return sf.PdfTextAlignment.left;
   }
 }
 
@@ -519,4 +865,3 @@ class PDFImageElement {
     );
   }
 }
-

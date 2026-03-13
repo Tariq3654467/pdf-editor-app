@@ -1,6 +1,7 @@
 #include <jni.h>
 #include <string>
 #include <vector>
+#include <algorithm>
 #include <cmath>
 #include <sstream>
 #include <cctype>
@@ -21,6 +22,7 @@ struct TextQuad {
     float topRightX, topRightY;
     float bottomLeftX, bottomLeftY;
     float bottomRightX, bottomRightY;
+    int pageIndex;
     std::string text;
     std::string objectId;
 };
@@ -59,6 +61,7 @@ std::string quadToJson(const TextQuad& quad) {
         << "\"topRight\":{\"x\":" << quad.topRightX << ",\"y\":" << quad.topRightY << "},"
         << "\"bottomLeft\":{\"x\":" << quad.bottomLeftX << ",\"y\":" << quad.bottomLeftY << "},"
         << "\"bottomRight\":{\"x\":" << quad.bottomRightX << ",\"y\":" << quad.bottomRightY << "},"
+        << "\"pageIndex\":" << quad.pageIndex << ","
         << "\"text\":\"" << quad.text << "\","
         << "\"objectId\":\"" << quad.objectId << "\""
         << "}";
@@ -87,21 +90,27 @@ jstring getTextQuadsForSelection(JNIEnv *env, jstring pdfPath, jint pageIndex,
             throw "Invalid PDF path";
         }
         
-        // Flutter already converts screen coordinates to PDF coordinate space (Y inverted).
-        // Use tap coordinates exactly as received - NO Y-axis inversion here.
-        // For a tap, start and end should be the same or very close - use center point
-        float tapX = (startX + endX) / 2.0f;
-        float tapY = (startY + endY) / 2.0f;
-        
-        // EXPAND TAP RECTANGLE BEFORE EXTRACTION
-        // This ensures taps near text still find words
-        // Use tap coordinates directly - NO Y-axis inversion
+        const float minX = std::min(startX, endX);
+        const float minY = std::min(startY, endY);
+        const float maxX = std::max(startX, endX);
+        const float maxY = std::max(startY, endY);
+
         constexpr float TAP_TOLERANCE = 12.0f; // PDF units
         fz_rect tapRect;
-        tapRect.x0 = tapX - TAP_TOLERANCE;
-        tapRect.y0 = tapY - TAP_TOLERANCE;
-        tapRect.x1 = tapX + TAP_TOLERANCE;
-        tapRect.y1 = tapY + TAP_TOLERANCE;
+        tapRect.x0 = minX;
+        tapRect.y0 = minY;
+        tapRect.x1 = maxX;
+        tapRect.y1 = maxY;
+
+        // For point taps, expand a tiny rect so nearby words are still found.
+        if ((tapRect.x1 - tapRect.x0) < 1.0f && (tapRect.y1 - tapRect.y0) < 1.0f) {
+            const float tapX = (startX + endX) / 2.0f;
+            const float tapY = (startY + endY) / 2.0f;
+            tapRect.x0 = tapX - TAP_TOLERANCE;
+            tapRect.y0 = tapY - TAP_TOLERANCE;
+            tapRect.x1 = tapX + TAP_TOLERANCE;
+            tapRect.y1 = tapY + TAP_TOLERANCE;
+        }
         
         // Create MuPDF context
         ctx = fz_new_context(nullptr, nullptr, FZ_STORE_UNLIMITED);
@@ -133,10 +142,8 @@ jstring getTextQuadsForSelection(JNIEnv *env, jstring pdfPath, jint pageIndex,
         // Get page bounds for debug validation
         fz_rect pageRect = fz_bound_page(ctx, page);
         float pageHeight = pageRect.y1;
-        
-        // Debug validation: Verify tap coordinates are in expected range
-        // Tapping a heading near top of page → tapY ≈ 120–150, NOT 600+
-        LOGI("Tap sanity: tap=(%.2f, %.2f), pageHeight=%.2f", tapX, tapY, pageHeight);
+        LOGI("Selection rect: (%.2f, %.2f) -> (%.2f, %.2f), pageHeight=%.2f",
+             tapRect.x0, tapRect.y0, tapRect.x1, tapRect.y1, pageHeight);
         
         // Extract structured text
         fz_stext_options opts = { 0 };
@@ -207,6 +214,7 @@ jstring getTextQuadsForSelection(JNIEnv *env, jstring pdfPath, jint pageIndex,
                                 quad.bottomLeftY = wordQuad.y1;
                                 quad.bottomRightX = wordQuad.x1;
                                 quad.bottomRightY = wordQuad.y1;
+                                quad.pageIndex = pageIndex;
                                 quad.text = wordText;
                                 quad.objectId = generateObjectId(pageIndex, centerX, centerY);
                                 quads.push_back(quad);

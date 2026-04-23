@@ -11,6 +11,7 @@ class SelectedPDFText {
   final String? fontFamily;
   final bool isBold;
   final bool isItalic;
+  final bool isUnderline;
 
   SelectedPDFText({
     required this.text,
@@ -22,6 +23,7 @@ class SelectedPDFText {
     this.fontFamily,
     this.isBold = false,
     this.isItalic = false,
+    this.isUnderline = false,
   });
 
   SelectedPDFText copyWith({
@@ -34,6 +36,7 @@ class SelectedPDFText {
     String? fontFamily,
     bool? isBold,
     bool? isItalic,
+    bool? isUnderline,
   }) {
     return SelectedPDFText(
       text: text ?? this.text,
@@ -45,6 +48,7 @@ class SelectedPDFText {
       fontFamily: fontFamily ?? this.fontFamily,
       isBold: isBold ?? this.isBold,
       isItalic: isItalic ?? this.isItalic,
+      isUnderline: isUnderline ?? this.isUnderline,
     );
   }
 }

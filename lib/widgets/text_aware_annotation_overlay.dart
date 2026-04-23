@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import '../models/pdf_annotation.dart';
 import '../services/annotation_storage_service.dart';
 import '../services/mupdf_editor_service.dart';
@@ -11,10 +12,11 @@ class TextAwareAnnotationOverlay extends StatefulWidget {
   final Widget child;
   final String pdfPath;
   final int currentPage;
-  final Size pageSize; // PDF page size in points
+  final List<Size> pageSizes; // Per-page sizes in points (supports varying page sizes)
   final double zoomLevel;
-  final Offset scrollOffset;
-  final Size? screenSize; // Screen size for coordinate conversion
+  final double scrollOffsetY; // Y scroll offset in pixels (from SfPdfViewer callback)
+  final double pageSpacing; // Page spacing in pixels (must match SfPdfViewer.pageSpacing)
+  final Size viewerSize; // Actual viewer size from LayoutBuilder
   final String? selectedTool; // 'pen', 'highlight', 'underline', 'eraser', null
   final Color? toolColor;
   final double? strokeWidth;
@@ -27,10 +29,11 @@ class TextAwareAnnotationOverlay extends StatefulWidget {
     required this.child,
     required this.pdfPath,
     required this.currentPage,
-    required this.pageSize,
-    this.zoomLevel = 1.0,
-    this.scrollOffset = Offset.zero,
-    this.screenSize,
+    required this.pageSizes, // Per-page sizes
+    required this.zoomLevel,
+    required this.scrollOffsetY,
+    required this.pageSpacing,
+    required this.viewerSize,
     this.selectedTool,
     this.toolColor,
     this.strokeWidth,
@@ -218,11 +221,19 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
       _debugLog('Widget updated: pdfPath changed=${oldWidget.pdfPath != widget.pdfPath}, page changed=${oldWidget.currentPage != widget.currentPage}');
       _loadAnnotations();
     }
+    
+    // No special handling needed for tool changes
+    
     // Also reload if annotations list changed externally
     if (widget.onAnnotationsChanged != null) {
       // Force repaint when widget updates
       setState(() {});
     }
+  }
+  
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   /// Load annotations for current PDF
@@ -246,52 +257,93 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   }
 
   /// Convert screen coordinates to PDF page coordinates (page-space)
-  /// CRITICAL: Pointer events come in overlay coordinate space (AFTER Transform.translate),
-  /// so screenPoint.dy is already in document-absolute space (scroll already accounted for).
-  /// Formula: pPage = (pScreen - pageOriginScreen) / zoom
-  /// This ensures annotations are stored in page-space and don't move with scroll/zoom
-  Offset _screenToPdf(Offset screenPoint, {bool useCurrentPage = false}) {
-    // Get screen size for scaling calculation
-    final screenSize = widget.screenSize ?? MediaQuery.of(context).size;
+  /// Uses per-page sizes with cumulative offsets to support varying page sizes
+  Offset _screenToPdf(Offset screenPoint) {
+    if (widget.pageSizes.isEmpty) {
+      return Offset.zero; // Safety check
+    }
     
-    // Calculate rendered PDF dimensions (PDF is scaled to fit screen width)
-    final pdfAspectRatio = widget.pageSize.height / widget.pageSize.width;
-    final renderedPdfWidth = screenSize.width;
-    final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    // Convert screen point to document space (add scroll offset)
+    final docY = screenPoint.dy + widget.scrollOffsetY;
     
-    // Calculate page origin in document-absolute space
-    // Pointer events are already in document-absolute space (Transform.translate applied)
-    final pageIndex = useCurrentPage 
-        ? widget.currentPage 
-        : (screenPoint.dy / renderedPdfHeight).floor();
-    final pageOriginScreen = Offset(0, pageIndex * renderedPdfHeight);
+    // Find which page this point belongs to using cumulative offsets
+    int pageIndex = 0;
+    double cumulativeY = 0.0;
     
-    // screenPoint is already in document-absolute space (scroll handled by Transform.translate)
-    // So we just need to subtract page origin and divide by zoom
-    final relativeYInPage = screenPoint.dy - pageOriginScreen.dy;
+    for (int i = 0; i < widget.pageSizes.length; i++) {
+      final pageSize = widget.pageSizes[i];
+      final scale = (widget.viewerSize.width / pageSize.width) * widget.zoomLevel;
+      final renderedPageHeight = pageSize.height * scale;
+      final pageStride = renderedPageHeight + (widget.pageSpacing * widget.zoomLevel);
+      
+      if (docY < cumulativeY + pageStride) {
+        pageIndex = i;
+        break;
+      }
+      cumulativeY += pageStride;
+    }
     
-    // Convert to PDF page coordinates using proper formula:
-    // pPage = (pScreen - pageOriginScreen) / zoom
-    // Effective zoom = baseScale * widget.zoomLevel, where baseScale fits page width
-    final baseScale = renderedPdfWidth / widget.pageSize.width;
-    final effectiveZoom = baseScale * widget.zoomLevel;
+    // Clamp pageIndex to valid range
+    pageIndex = pageIndex.clamp(0, widget.pageSizes.length - 1);
+    final pageSize = widget.pageSizes[pageIndex];
     
-    // X: Convert screen X to PDF X (accounting for zoom)
-    final pdfX = (screenPoint.dx - pageOriginScreen.dx) / effectiveZoom;
+    // Recalculate cumulative Y up to this page
+    cumulativeY = 0.0;
+    for (int i = 0; i < pageIndex; i++) {
+      final prevPageSize = widget.pageSizes[i];
+      final prevScale = (widget.viewerSize.width / prevPageSize.width) * widget.zoomLevel;
+      final prevRenderedHeight = prevPageSize.height * prevScale;
+      cumulativeY += prevRenderedHeight + (widget.pageSpacing * widget.zoomLevel);
+    }
     
-    // Y: Convert screen Y to PDF Y (accounting for zoom and Y-axis inversion)
-    // Screen: Y=0 at top, increases downward
+    // Calculate Y position within the current page
+    final yInPageScreen = docY - cumulativeY;
+    
+    // Get scale for current page
+    final scale = (widget.viewerSize.width / pageSize.width) * widget.zoomLevel;
+    
+    // Convert to PDF coordinates
+    final pdfX = screenPoint.dx / scale;
+    final pdfY = pageSize.height - (yInPageScreen / scale);
+    
+    return Offset(
+      pdfX.clamp(0.0, pageSize.width),
+      pdfY.clamp(0.0, pageSize.height),
+    );
+  }
+  
+  /// Convert PDF page-space point to DOCUMENT-space screen coords (not yet scrolled)
+  /// Returns coordinates in document space (before scroll is applied)
+  /// Uses per-page sizes with cumulative offsets to support varying page sizes
+  Offset _pdfToScreenDoc(Offset pdfPoint, int pageIndex) {
+    if (widget.pageSizes.isEmpty || pageIndex < 0 || pageIndex >= widget.pageSizes.length) {
+      return Offset.zero; // Safety check
+    }
+    
+    final pageSize = widget.pageSizes[pageIndex];
+    final scale = (widget.viewerSize.width / pageSize.width) * widget.zoomLevel;
+    
+    // Calculate cumulative Y offset up to this page
+    double cumulativeY = 0.0;
+    for (int i = 0; i < pageIndex; i++) {
+      final prevPageSize = widget.pageSizes[i];
+      final prevScale = (widget.viewerSize.width / prevPageSize.width) * widget.zoomLevel;
+      final prevRenderedHeight = prevPageSize.height * prevScale;
+      cumulativeY += prevRenderedHeight + (widget.pageSpacing * widget.zoomLevel);
+    }
+    
+    // Convert PDF X to screen X
+    final x = pdfPoint.dx * scale;
+    
+    // Convert PDF Y to screen Y (accounting for Y-axis inversion)
     // PDF: Y=0 at bottom, increases upward
-    final relativeYInPageNormalized = relativeYInPage / effectiveZoom;
-    final renderedPdfHeightInPageSpace = widget.pageSize.height * widget.zoomLevel;
-    final screenYFromBottom = renderedPdfHeightInPageSpace - relativeYInPageNormalized;
-    final pdfY = (screenYFromBottom / renderedPdfHeightInPageSpace) * widget.pageSize.height;
+    // Screen: Y=0 at top, increases downward
+    final yFromTopInPage = (pageSize.height - pdfPoint.dy) * scale;
     
-    // Clamp coordinates to page boundaries to prevent drawing outside the page
-    final clampedX = pdfX.clamp(0.0, widget.pageSize.width);
-    final clampedY = pdfY.clamp(0.0, widget.pageSize.height);
+    // Calculate document-space Y (cumulative offset + offset within page)
+    final docY = cumulativeY + yFromTopInPage;
     
-    return Offset(clampedX, clampedY);
+    return Offset(x, docY);
   }
 
   /// Handle pan start (begin drawing/selection)
@@ -302,14 +354,12 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
     }
 
     _debugLog('Pan start: tool=${widget.selectedTool}, position=${details.localPosition}');
-    // For pen, highlight, and underline, use current page to prevent page boundary issues
-    final useCurrentPage = widget.selectedTool == 'pen' || 
-                          widget.selectedTool == 'highlight' || 
-                          widget.selectedTool == 'underline';
-    final pdfPoint = _screenToPdf(details.localPosition, useCurrentPage: useCurrentPage);
+    // Convert screen point to PDF page-space coordinates
+    final pdfPoint = _screenToPdf(details.localPosition);
     _debugLog('Converted to PDF: $pdfPoint');
 
     if (widget.selectedTool == 'pen') {
+      // Start a new pen stroke on the current page
       setState(() {
         _currentPenPath = [pdfPoint];
       });
@@ -329,23 +379,16 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
   void _onPanUpdate(DragUpdateDetails details) {
     if (widget.selectedTool == null) return;
 
-    // For pen, highlight, and underline, use current page to prevent page boundary issues
-    final useCurrentPage = widget.selectedTool == 'pen' || 
-                          widget.selectedTool == 'highlight' || 
-                          widget.selectedTool == 'underline';
-    final pdfPoint = _screenToPdf(details.localPosition, useCurrentPage: useCurrentPage);
+    // Convert screen point to PDF page-space coordinates
+    final pdfPoint = _screenToPdf(details.localPosition);
 
     if (widget.selectedTool == 'pen') {
-      // Prevent adding duplicate or very close points to avoid vertical lines
+      // Continue current pen stroke, avoid adding too many points
       if (_currentPenPath.isNotEmpty) {
         final lastPoint = _currentPenPath.last;
-        final dx = (pdfPoint.dx - lastPoint.dx).abs();
-        final dy = (pdfPoint.dy - lastPoint.dy).abs();
         final distance = (pdfPoint - lastPoint).distance;
-        
-        // Only add point if it's at least 0.5 points away (prevents vertical line artifacts)
-        // Also check if movement is primarily vertical (which could cause unwanted vertical lines)
-        if (distance < 0.5 || (dx < 0.1 && dy > 1.0)) {
+        // Only add point if it moved enough to avoid noisy points
+        if (distance < 0.5) {
           return;
         }
       }
@@ -368,9 +411,12 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
 
     _debugLog('Pan end: tool=${widget.selectedTool}');
 
-    if (widget.selectedTool == 'pen' && _currentPenPath.length >= 2) {
-      _debugLog('Saving pen annotation with ${_currentPenPath.length} points');
-      await _savePenAnnotation();
+    if (widget.selectedTool == 'pen') {
+      // Finish pen stroke and save annotation
+      if (_currentPenPath.length >= 2) {
+        _debugLog('Saving pen annotation with ${_currentPenPath.length} points');
+        await _savePenAnnotation();
+      }
     } else if ((widget.selectedTool == 'highlight' || widget.selectedTool == 'underline') &&
                _selectionStart != null && _selectionEnd != null) {
       _debugLog('Saving ${widget.selectedTool} annotation from $_selectionStart to $_selectionEnd');
@@ -555,25 +601,22 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
       currentPenPath: _currentPenPath,
       selectionStart: _selectionStart,
       selectionEnd: _selectionEnd,
-      pageSize: widget.pageSize,
+      pageSizes: widget.pageSizes,
       zoomLevel: widget.zoomLevel,
-      scrollOffset: widget.scrollOffset,
-      screenSize: widget.screenSize,
+      scrollOffsetY: widget.scrollOffsetY,
+      pageSpacing: widget.pageSpacing,
+      viewerSize: widget.viewerSize,
       selectedTool: widget.selectedTool,
       toolColor: widget.toolColor,
       strokeWidth: widget.strokeWidth,
     );
     
     // Use Stack to ensure annotations are drawn on top of PDF viewer
-    // Use Transform.translate to make annotations scroll with the PDF content
-    // The overlay uses absolute document coordinates, and we translate by scroll offset
-    Widget overlay = Transform.translate(
-      offset: Offset(0, -widget.scrollOffset.dy),
-      child: CustomPaint(
-        painter: painter,
-        size: Size.infinite, // Fill available space
-        child: Container(), // Empty container to fill space
-      ),
+    // NO Transform.translate - scroll is applied ONCE in the painter
+    Widget overlay = CustomPaint(
+      painter: painter,
+      size: Size.infinite, // Fill available space
+      child: Container(), // Empty container to fill space
     );
     
     // Wrap overlay with gesture detector if tool is selected
@@ -619,7 +662,7 @@ class TextAwareAnnotationOverlayState extends State<TextAwareAnnotationOverlay> 
       children: [
         // PDF viewer as base layer
         widget.child,
-        // Annotation overlay on top - scrolls with PDF content via Transform.translate
+        // Annotation overlay on top - scroll is applied ONCE in the painter (no Transform.translate)
         Positioned.fill(
           child: overlay,
         ),
@@ -635,10 +678,11 @@ class _AnnotationPainter extends CustomPainter {
   final List<Offset> currentPenPath;
   final Offset? selectionStart;
   final Offset? selectionEnd;
-  final Size pageSize;
+  final List<Size> pageSizes; // Per-page sizes (supports varying page sizes)
   final double zoomLevel;
-  final Offset scrollOffset;
-  final Size? screenSize;
+  final double scrollOffsetY; // Y scroll offset in pixels
+  final double pageSpacing; // Page spacing in pixels
+  final Size viewerSize; // Actual viewer size
   final String? selectedTool;
   final Color? toolColor;
   final double? strokeWidth;
@@ -650,63 +694,66 @@ class _AnnotationPainter extends CustomPainter {
     required this.currentPenPath,
     this.selectionStart,
     this.selectionEnd,
-    required this.pageSize,
+    required this.pageSizes, // Per-page sizes
     required this.zoomLevel,
-    required this.scrollOffset,
-    this.screenSize,
+    required this.scrollOffsetY,
+    required this.pageSpacing,
+    required this.viewerSize,
     this.selectedTool,
     this.toolColor,
     this.strokeWidth,
   });
-
-  /// Convert PDF page coordinates (page-space) to screen coordinates
-  /// Formula: pScreen = (pPage * zoom) + pageOriginScreen - scroll
-  /// Since Transform.translate handles scroll, this returns: (pPage * zoom) + pageOriginScreen
-  /// Must match the inverse of _screenToPdf conversion
-  /// @param pdfPoint: PDF coordinates (page-relative, bottom-left origin, in points)
-  /// @param canvasSize: Size of the canvas
-  /// @param annotationPageIndex: The page index where this annotation is located
-  Offset _pdfToScreen(Offset pdfPoint, Size canvasSize, int annotationPageIndex) {
-    // Get screen size (use canvas size if screenSize not provided)
-    final screenSize = this.screenSize ?? canvasSize;
+  
+  /// Convert PDF page-space point to DOCUMENT-space screen coords (not yet scrolled)
+  /// Returns coordinates in document space (before scroll is applied)
+  /// Convert PDF page-space point to DOCUMENT-space screen coords (not yet scrolled)
+  /// Returns coordinates in document space (before scroll is applied)
+  /// Uses per-page sizes with cumulative offsets to support varying page sizes
+  Offset _pdfToScreenDoc(Offset pdfPoint, int pageIndex) {
+    if (pageSizes.isEmpty || pageIndex < 0 || pageIndex >= pageSizes.length) {
+      return Offset.zero; // Safety check
+    }
     
-    // Calculate rendered PDF dimensions (PDF is scaled to fit screen width)
-    final pdfAspectRatio = pageSize.height / pageSize.width;
-    final renderedPdfWidth = screenSize.width;
-    final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+    final pageSize = pageSizes[pageIndex];
+    final scale = (viewerSize.width / pageSize.width) * zoomLevel;
     
-    // Calculate page origin on screen (where this page starts in viewport)
-    final pageOriginScreen = Offset(0, annotationPageIndex * renderedPdfHeight);
+    // Calculate cumulative Y offset up to this page
+    double cumulativeY = 0.0;
+    for (int i = 0; i < pageIndex; i++) {
+      final prevPageSize = pageSizes[i];
+      final prevScale = (viewerSize.width / prevPageSize.width) * zoomLevel;
+      final prevRenderedHeight = prevPageSize.height * prevScale;
+      cumulativeY += prevRenderedHeight + (pageSpacing * zoomLevel);
+    }
     
-    // Effective zoom = baseScale * zoomLevel, where baseScale fits page width
-    final baseScale = renderedPdfWidth / pageSize.width;
-    final effectiveZoom = baseScale * zoomLevel;
+    // Convert PDF X to screen X
+    final x = pdfPoint.dx * scale;
     
     // Convert PDF Y to screen Y (accounting for Y-axis inversion)
     // PDF: Y=0 at bottom, increases upward
     // Screen: Y=0 at top, increases downward
-    final screenYFromBottom = pdfPoint.dy; // PDF Y is already from bottom
-    final renderedPdfHeightInPageSpace = pageSize.height * zoomLevel;
-    final relativeYInPage = (screenYFromBottom / pageSize.height) * renderedPdfHeightInPageSpace;
-    final screenYFromTop = renderedPdfHeightInPageSpace - relativeYInPage;
+    final yFromTopInPage = (pageSize.height - pdfPoint.dy) * scale;
     
-    // Apply formula: pScreen = (pPage * zoom) + pageOriginScreen
-    // X: PDF X to screen X
-    final x = (pdfPoint.dx * effectiveZoom) + pageOriginScreen.dx;
+    // Calculate document-space Y (cumulative offset + offset within page)
+    final docY = cumulativeY + yFromTopInPage;
     
-    // Y: PDF Y to screen Y (with Y-axis inversion)
-    final y = (screenYFromTop * effectiveZoom) + pageOriginScreen.dy;
-    
-    // The Transform.translate in build() will subtract scroll offset
-    return Offset(x, y);
+    return Offset(x, docY);
   }
+
 
   /// Draw text quad
   void _drawQuad(Canvas canvas, TextQuad quad, Paint paint, Size canvasSize, int annotationPageIndex) {
-    final topLeft = _pdfToScreen(quad.topLeft, canvasSize, annotationPageIndex);
-    final topRight = _pdfToScreen(quad.topRight, canvasSize, annotationPageIndex);
-    final bottomLeft = _pdfToScreen(quad.bottomLeft, canvasSize, annotationPageIndex);
-    final bottomRight = _pdfToScreen(quad.bottomRight, canvasSize, annotationPageIndex);
+    // Convert to document space, then apply scroll once
+    final docTopLeft = _pdfToScreenDoc(quad.topLeft, annotationPageIndex);
+    final docTopRight = _pdfToScreenDoc(quad.topRight, annotationPageIndex);
+    final docBottomLeft = _pdfToScreenDoc(quad.bottomLeft, annotationPageIndex);
+    final docBottomRight = _pdfToScreenDoc(quad.bottomRight, annotationPageIndex);
+    
+    // Apply scroll ONCE to convert document space to screen space
+    final topLeft = Offset(docTopLeft.dx, docTopLeft.dy - scrollOffsetY);
+    final topRight = Offset(docTopRight.dx, docTopRight.dy - scrollOffsetY);
+    final bottomLeft = Offset(docBottomLeft.dx, docBottomLeft.dy - scrollOffsetY);
+    final bottomRight = Offset(docBottomRight.dx, docBottomRight.dy - scrollOffsetY);
 
     final path = Path()
       ..moveTo(topLeft.dx, topLeft.dy)
@@ -726,16 +773,28 @@ class _AnnotationPainter extends CustomPainter {
     for (var annotation in annotations) {
       final annotationPageIndex = annotation.pageIndex;
       
-      // Calculate if annotation is visible in viewport
-      final screenSize = this.screenSize ?? size;
-      final pdfAspectRatio = pageSize.height / pageSize.width;
-      final renderedPdfWidth = screenSize.width;
-      final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+      // Calculate if annotation is visible in viewport using per-page sizes with cumulative offsets
+      if (annotationPageIndex < 0 || annotationPageIndex >= pageSizes.length) {
+        continue; // Invalid page index
+      }
       
-      final annotationPageStartY = annotationPageIndex * renderedPdfHeight;
-      final annotationPageEndY = annotationPageStartY + renderedPdfHeight;
-      final viewportTop = scrollOffset.dy;
-      final viewportBottom = scrollOffset.dy + size.height;
+      final annotationPageSize = pageSizes[annotationPageIndex];
+      final scale = (viewerSize.width / annotationPageSize.width) * zoomLevel;
+      final renderedPageHeight = annotationPageSize.height * scale;
+      
+      // Calculate cumulative Y offset up to this page
+      double cumulativeY = 0.0;
+      for (int i = 0; i < annotationPageIndex; i++) {
+        final prevPageSize = pageSizes[i];
+        final prevScale = (viewerSize.width / prevPageSize.width) * zoomLevel;
+        final prevRenderedHeight = prevPageSize.height * prevScale;
+        cumulativeY += prevRenderedHeight + (pageSpacing * zoomLevel);
+      }
+      
+      final annotationPageStartY = cumulativeY;
+      final annotationPageEndY = cumulativeY + renderedPageHeight;
+      final viewportTop = scrollOffsetY;
+      final viewportBottom = scrollOffsetY + size.height;
       
       // Skip if annotation is completely outside viewport
       if (annotationPageEndY < viewportTop || annotationPageStartY > viewportBottom) {
@@ -759,8 +818,11 @@ class _AnnotationPainter extends CustomPainter {
           ..strokeWidth = annotation.strokeWidth * zoomLevel;
 
         for (var quad in annotation.quads) {
-          final start = _pdfToScreen(quad.bottomLeft, size, annotationPageIndex);
-          final end = _pdfToScreen(quad.bottomRight, size, annotationPageIndex);
+          // Convert to document space, then apply scroll once
+          final docStart = _pdfToScreenDoc(quad.bottomLeft, annotationPageIndex);
+          final docEnd = _pdfToScreenDoc(quad.bottomRight, annotationPageIndex);
+          final start = Offset(docStart.dx, docStart.dy - scrollOffsetY);
+          final end = Offset(docEnd.dx, docEnd.dy - scrollOffsetY);
           canvas.drawLine(start, end, paint);
         }
       } else if (annotation is PenAnnotation) {
@@ -774,11 +836,14 @@ class _AnnotationPainter extends CustomPainter {
           ..strokeJoin = StrokeJoin.round;
 
         final path = Path();
-        final firstPoint = _pdfToScreen(annotation.points.first, size, annotationPageIndex);
+        // Convert to document space, then apply scroll once
+        final docFirstPoint = _pdfToScreenDoc(annotation.points.first, annotationPageIndex);
+        final firstPoint = Offset(docFirstPoint.dx, docFirstPoint.dy - scrollOffsetY);
         path.moveTo(firstPoint.dx, firstPoint.dy);
 
         for (var i = 1; i < annotation.points.length; i++) {
-          final point = _pdfToScreen(annotation.points[i], size, annotationPageIndex);
+          final docPoint = _pdfToScreenDoc(annotation.points[i], annotationPageIndex);
+          final point = Offset(docPoint.dx, docPoint.dy - scrollOffsetY);
           path.lineTo(point.dx, point.dy);
         }
 
@@ -786,13 +851,14 @@ class _AnnotationPainter extends CustomPainter {
       }
     }
     
-    if (drawnCount > 0) {
-      print('_AnnotationPainter: Drew $drawnCount annotations for page $currentPage');
-    } else if (annotations.isNotEmpty) {
-      print('_AnnotationPainter: No annotations for page $currentPage (total: ${annotations.length}, pages: ${annotations.map((a) => a.pageIndex).toSet()})');
-    }
+    // Debug logging removed to prevent log spam during scrolling
+    // Uncomment if needed for debugging:
+    // if (drawnCount > 0) {
+    //   print('_AnnotationPainter: Drew $drawnCount annotations for page $currentPage');
+    // }
 
     // Draw current pen path (use currentPage for in-progress drawings)
+    // Note: Pen tool is now handled by PenRasterOverlay, this is legacy code
     if (selectedTool == 'pen' && currentPenPath.length >= 2) {
       final paint = Paint()
         ..color = toolColor ?? Colors.black
@@ -802,11 +868,14 @@ class _AnnotationPainter extends CustomPainter {
         ..strokeJoin = StrokeJoin.round;
 
       final path = Path();
-      final firstPoint = _pdfToScreen(currentPenPath.first, size, currentPage);
+      // Convert to document space, then apply scroll once
+      final docFirstPoint = _pdfToScreenDoc(currentPenPath.first, currentPage);
+      final firstPoint = Offset(docFirstPoint.dx, docFirstPoint.dy - scrollOffsetY);
       path.moveTo(firstPoint.dx, firstPoint.dy);
 
       for (var i = 1; i < currentPenPath.length; i++) {
-        final point = _pdfToScreen(currentPenPath[i], size, currentPage);
+        final docPoint = _pdfToScreenDoc(currentPenPath[i], currentPage);
+        final point = Offset(docPoint.dx, docPoint.dy - scrollOffsetY);
         path.lineTo(point.dx, point.dy);
       }
 
@@ -816,8 +885,11 @@ class _AnnotationPainter extends CustomPainter {
     // Draw selection rectangle (use currentPage for in-progress selections)
     if ((selectedTool == 'highlight' || selectedTool == 'underline') &&
         selectionStart != null && selectionEnd != null) {
-      final start = _pdfToScreen(selectionStart!, size, currentPage);
-      final end = _pdfToScreen(selectionEnd!, size, currentPage);
+      // Convert to document space, then apply scroll once
+      final docStart = _pdfToScreenDoc(selectionStart!, currentPage);
+      final docEnd = _pdfToScreenDoc(selectionEnd!, currentPage);
+      final start = Offset(docStart.dx, docStart.dy - scrollOffsetY);
+      final end = Offset(docEnd.dx, docEnd.dy - scrollOffsetY);
 
       final rect = Rect.fromPoints(start, end);
       final paint = Paint()
@@ -847,69 +919,56 @@ class _AnnotationPainter extends CustomPainter {
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.0;
 
-      // Draw current page border in screen space
-      final effectiveScreenSize = this.screenSize ?? size;
-      final pdfAspectRatio = pageSize.height / pageSize.width;
-      final renderedPdfWidth = effectiveScreenSize.width;
-      final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
-      final pageOriginScreen = Offset(0, currentPage * renderedPdfHeight);
-      final pageRect = Rect.fromLTWH(
-        pageOriginScreen.dx,
-        pageOriginScreen.dy,
-        renderedPdfWidth,
-        renderedPdfHeight,
-      );
-      canvas.drawRect(pageRect, debugPaint);
+      // Draw current page border in screen space using per-page sizes with cumulative offsets
+      if (currentPage >= 0 && currentPage < pageSizes.length) {
+        final currentPageSize = pageSizes[currentPage];
+        final scale = (viewerSize.width / currentPageSize.width) * zoomLevel;
+        final renderedPageHeight = currentPageSize.height * scale;
+        
+        // Calculate cumulative Y offset up to this page
+        double cumulativeY = 0.0;
+        for (int i = 0; i < currentPage; i++) {
+          final prevPageSize = pageSizes[i];
+          final prevScale = (viewerSize.width / prevPageSize.width) * zoomLevel;
+          final prevRenderedHeight = prevPageSize.height * prevScale;
+          cumulativeY += prevRenderedHeight + (pageSpacing * zoomLevel);
+        }
+        
+        final pageRect = Rect.fromLTWH(
+          0,
+          cumulativeY - scrollOffsetY, // Apply scroll to convert to screen space
+          viewerSize.width,
+          renderedPageHeight,
+        );
+        canvas.drawRect(pageRect, debugPaint);
 
-      // Sample roundtrip for a mid-page point
-      final samplePdfPoint = Offset(pageSize.width / 2, pageSize.height / 2);
-      final sampleScreen = _pdfToScreen(samplePdfPoint, size, currentPage);
-      final roundtripBack = _screenToPdfDebug(sampleScreen, size, currentPage);
-      print('DEBUG mapping: pdf=$samplePdfPoint -> screen=$sampleScreen -> pdfBack=$roundtripBack');
-
-      // Mark the sample point
-      canvas.drawCircle(sampleScreen, 4, debugPaint..style = PaintingStyle.fill);
+        // Sample roundtrip for a mid-page point
+        final samplePdfPoint = Offset(currentPageSize.width / 2, currentPageSize.height / 2);
+        final docSample = _pdfToScreenDoc(samplePdfPoint, currentPage);
+        final sampleScreen = Offset(docSample.dx, docSample.dy - scrollOffsetY);
+        print('DEBUG mapping: pdf=$samplePdfPoint -> doc=$docSample -> screen=$sampleScreen');
+        
+        // Mark the sample point
+        canvas.drawCircle(sampleScreen, 4, debugPaint..style = PaintingStyle.fill);
+      }
     }
-  }
-
-  /// Debug helper: approximate inverse of _pdfToScreen for roundtrip logging only
-  Offset _screenToPdfDebug(Offset screenPoint, Size canvasSize, int pageIndex) {
-    final effectiveScreenSize = screenSize ?? canvasSize;
-    final pdfAspectRatio = pageSize.height / pageSize.width;
-    final renderedPdfWidth = effectiveScreenSize.width;
-    final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
-
-    final pageOriginScreen = Offset(0, pageIndex * renderedPdfHeight);
-    final baseScale = renderedPdfWidth / pageSize.width;
-    final effectiveZoom = baseScale * zoomLevel;
-
-    final localX = (screenPoint.dx - pageOriginScreen.dx) / effectiveZoom;
-
-    final renderedPdfHeightInPageSpace = pageSize.height * zoomLevel;
-    final localYInPage = (screenPoint.dy - pageOriginScreen.dy) / effectiveZoom;
-    final screenYFromBottom = renderedPdfHeightInPageSpace - localYInPage;
-    final pdfY = (screenYFromBottom / renderedPdfHeightInPageSpace) * pageSize.height;
-
-    return Offset(localX, pdfY);
   }
 
   @override
   bool shouldRepaint(_AnnotationPainter oldDelegate) {
-    final shouldRepaint = oldDelegate.annotations.length != annotations.length ||
+    // Check for significant changes that require repaint
+    // Use tolerance for scrollOffsetY to avoid repainting on every tiny scroll change
+    const scrollTolerance = 0.5; // Only repaint if scroll changed by more than 0.5 pixels
+    
+    return oldDelegate.annotations.length != annotations.length ||
         oldDelegate.annotations != annotations ||
         oldDelegate.currentPenPath != currentPenPath ||
         oldDelegate.selectionStart != selectionStart ||
         oldDelegate.selectionEnd != selectionEnd ||
-        oldDelegate.zoomLevel != zoomLevel ||
-        oldDelegate.scrollOffset != scrollOffset ||
+        (oldDelegate.zoomLevel - zoomLevel).abs() > 0.001 || // Zoom tolerance
+        (oldDelegate.scrollOffsetY - scrollOffsetY).abs() > scrollTolerance || // Scroll tolerance
         oldDelegate.selectedTool != selectedTool ||
         oldDelegate.currentPage != currentPage;
-    
-    if (shouldRepaint) {
-      print('_AnnotationPainter: shouldRepaint=true (annotations: ${oldDelegate.annotations.length} -> ${annotations.length}, page: ${oldDelegate.currentPage} -> $currentPage)');
-    }
-    
-    return shouldRepaint;
   }
 }
 

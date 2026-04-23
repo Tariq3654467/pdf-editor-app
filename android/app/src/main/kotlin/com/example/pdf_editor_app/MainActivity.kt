@@ -24,6 +24,7 @@ class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.example.pdf_editor_app/file_intent"
     private val PDF_SCAN_CHANNEL = "com.example.pdf_editor_app/pdf_scan"
     private val PDF_EDITOR_CHANNEL = "com.example.pdf_editor_app/pdf_editor"
+    private val PDF_INLINE_TEXT_EDITOR_CHANNEL = "com.example.pdf_editor_app/pdf_inline_text_editor"
     private val SAF_REQUEST_CODE_TREE = 1001
     private val SAF_REQUEST_CODE_DOCUMENT = 1002
     private var pendingResult: MethodChannel.Result? = null
@@ -82,12 +83,21 @@ class MainActivity : FlutterActivity() {
             }
         }
         
-        // Channel for PDF editing using MuPDF native engine
+        // Channel for PDF editing using MuPDF native engine (DEPRECATED - native library removed)
+        // Use PDFInlineTextEditorService or Flutter packages instead
+        /*
         val pdfEditorService = PDFEditorService(
             MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_EDITOR_CHANNEL)
         )
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_EDITOR_CHANNEL).setMethodCallHandler { call, result ->
             pdfEditorService.handleMethodCall(call, result)
+        }
+        */
+        
+        // Channel for native Java PDF inline text editing using Apache PDFBox
+        val pdfInlineTextEditorService = PDFInlineTextEditorService()
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, PDF_INLINE_TEXT_EDITOR_CHANNEL).setMethodCallHandler { call, result ->
+            pdfInlineTextEditorService.handleMethodCall(call, result)
         }
         
         // Channel for PDF scanning and SAF access

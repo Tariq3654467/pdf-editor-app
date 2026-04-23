@@ -17,12 +17,9 @@ class PDFEditorNative {
         private const val TAG = "PDFEditorNative"
         
         init {
-            try {
-                System.loadLibrary("pdf_editor_native")
-                Log.d(TAG, "Native library loaded successfully")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load native library", e)
-            }
+            // Native library has been removed - this service is deprecated
+            // Use PDFInlineTextEditorService (Apache PDFBox) instead
+            Log.d(TAG, "PDFEditorNative is deprecated - native library not available")
         }
     }
     

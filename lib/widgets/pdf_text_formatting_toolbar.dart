@@ -5,11 +5,13 @@ import 'package:flutter/material.dart';
 class PDFTextFormattingToolbar extends StatefulWidget {
   final bool isBold;
   final bool isItalic;
+  final bool isUnderline;
   final String? fontFamily;
   final double fontSize;
   final Color textColor;
   final Function(bool)? onBoldChanged;
   final Function(bool)? onItalicChanged;
+  final Function(bool)? onUnderlineChanged;
   final Function(String)? onFontChanged;
   final Function(double)? onFontSizeChanged;
   final Function(Color)? onColorChanged;
@@ -27,6 +29,7 @@ class PDFTextFormattingToolbar extends StatefulWidget {
     super.key,
     this.isBold = false,
     this.isItalic = false,
+    this.isUnderline = false,
     this.fontFamily,
     this.fontSize = 12.0,
     this.textColor = Colors.black,
@@ -34,6 +37,7 @@ class PDFTextFormattingToolbar extends StatefulWidget {
     this.isLoading = false,
     this.onBoldChanged,
     this.onItalicChanged,
+    this.onUnderlineChanged,
     this.onFontChanged,
     this.onFontSizeChanged,
     this.onColorChanged,
@@ -182,6 +186,13 @@ class _PDFTextFormattingToolbarState extends State<PDFTextFormattingToolbar> {
             isSelected: widget.isItalic,
             onTap: () => widget.onItalicChanged?.call(!widget.isItalic),
             tooltip: 'Italic',
+          ),
+          // Underline
+          _buildToolbarButton(
+            icon: Icons.format_underline,
+            isSelected: widget.isUnderline,
+            onTap: () => widget.onUnderlineChanged?.call(!widget.isUnderline),
+            tooltip: 'Underline',
           ),
           // Font size - Modern design
           PopupMenuButton<double>(

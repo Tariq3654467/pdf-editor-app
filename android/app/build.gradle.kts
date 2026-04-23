@@ -21,7 +21,7 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("src/main/kotlin")
+            java.srcDirs("src/main/kotlin", "src/main/java")
             jniLibs.srcDirs("src/main/libs")
         }
     }
@@ -31,21 +31,15 @@ android {
         applicationId = "com.example.pdf_editor_app"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // PDFBox 3.0.1 requires minSdk 26 (Android 8.0) or higher
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
         
-        // MuPDF NDK configuration
+        // NDK configuration (if needed for other native libraries)
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86", "x86_64")
-        }
-        
-        externalNativeBuild {
-            cmake {
-                cppFlags += "-std=c++17"
-                arguments += "-DANDROID_STL=c++_shared"
-            }
         }
     }
 
@@ -57,14 +51,6 @@ android {
         }
     }
     
-    // Enable external native build for MuPDF
-    externalNativeBuild {
-        cmake {
-            path = file("src/main/cpp/CMakeLists.txt")
-            version = "3.22.1"
-        }
-    }
-    
     packaging {
         resources {
             pickFirsts += listOf(
@@ -73,8 +59,24 @@ android {
                 "lib/armeabi-v7a/libc++_shared.so",
                 "lib/arm64-v8a/libc++_shared.so"
             )
+            // Exclude duplicate META-INF files from dependencies (PDFBox, JUnit, etc.)
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/LICENSE.md",
+                "META-INF/LICENSE-notice.md",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
         }
     }
+}
+
+dependencies {
+    // iText 7 Core for PDF text extraction and manipulation
+    // iText is Android-compatible and doesn't require AWT stubs
+    implementation("com.itextpdf:itext7-core:7.1.9")
 }
 
 flutter {

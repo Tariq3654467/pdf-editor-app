@@ -14,6 +14,7 @@ import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import '../services/pdf_service.dart';
 import '../services/pdf_tools_service.dart';
 import '../services/pdf_preferences_service.dart';
@@ -26,14 +27,34 @@ import '../widgets/pdf_text_formatting_toolbar.dart';
 import '../models/selected_pdf_text.dart';
 import '../services/pdf_text_selection_service.dart';
 import '../services/mupdf_editor_service.dart';
+import '../services/pdf_inline_text_editor_service.dart';
 import '../services/pdf_save_service.dart';
 import '../widgets/in_app_file_picker.dart';
 import '../widgets/text_aware_annotation_overlay.dart';
-import '../models/pdf_annotation.dart';
+import '../models/pdf_annotation.dart' as app_models;
 import '../services/annotation_storage_service.dart';
 
 /// Active tool for the bottom annotation toolbar
-enum PdfTool { none, copy, pen, highlight, underline, eraser }
+enum PdfTool {
+  none,
+  copy,
+  pen,
+  highlight,
+  underline,
+  strike, // Strikethrough
+  eraser, // kept for compatibility, not shown in toolbar
+  editText, // Edit existing text (enables text selection)
+}
+
+/// Cursor type for desktop/web (conceptual on mobile)
+enum CursorType {
+  none,          // Default cursor
+  text,          // I-beam for text selection/editing
+  pen,           // Freehand drawing cursor
+  underline,     // Underline tool
+  highlight,     // Highlight tool
+  strikeThrough, // Strike-through tool
+}
 
 class PDFViewerScreen extends StatefulWidget {
   final String filePath;
@@ -62,16 +83,25 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Timer? _pdfReloadDebounceTimer; // Debounce timer for PDF reloads
   bool _isScrolling = false;
   bool _showPagePreview = true; // Control visibility of page preview bar
-  double _pdfScrollOffset = 0.0; // Track PDF vertical scroll offset for annotations
+  double _pdfScrollOffsetY = 0.0; // Track PDF vertical scroll offset (pixels) from SfPdfViewer callback
   int _pdfReloadKey = 0; // Key to force PDF viewer reload after modifications
   bool _isSavingAnnotation = false; // Prevent multiple simultaneous saves
   DateTime? _lastReloadTime; // Track last reload time to prevent excessive reloads
   
   // Text-aware annotation system
-  Size? _pdfPageSize; // PDF page size in points
+  Size? _pdfPageSize; // PDF page size in points (fallback for first page)
+  List<Size> _pdfPageSizes = []; // Per-page sizes in points (supports varying page sizes)
   double _zoomLevel = 1.0;
-  List<PDFAnnotation> _savedAnnotations = [];
+  static const double _pageSpacing = 8.0; // MUST match SfPdfViewer.pageSpacing
+  List<app_models.PDFAnnotation> _savedAnnotations = [];
   final AnnotationStorageService _annotationStorage = AnnotationStorageService();
+  
+  // Undo/Redo for Syncfusion annotations (highlight, underline, strikethrough)
+  List<Uint8List> _annotationHistory = []; // Store PDF document bytes as snapshots
+  int _historyIndex = -1; // Current position in history (-1 means no history)
+  double? _savedZoomLevel; // Store zoom level before Copy tool zoom
+  Timer? _annotationSaveTimer; // Timer to save state after annotation is created
+  PdfTool? _previousTool; // Track previous tool to detect when annotation is finished
   
   // Error handling
   String? _errorMessage;
@@ -109,6 +139,59 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   bool _showTextFormattingToolbar = false;
   bool _isScannedDocument = false; // Track if PDF is scanned (image-based)
   
+  // Text editing undo/redo state
+  final _TextEditorController _textEditorController = _TextEditorController();
+  bool _canUndoText = false;
+  bool _canRedoText = false;
+
+  // Cursor state (desktop/web)
+  CursorType _cursorType = CursorType.none;
+
+  // Add-text tool state ("T" tool)
+  bool _isAddTextToolActive = false;
+  
+  // Text selection state (for Syncfusion built-in text selection)
+  String? _syncfusionSelectedText; // Text selected via Syncfusion's built-in selection
+  Rect? _syncfusionSelectionBounds; // Bounds of selected text
+  int? _syncfusionSelectionPage; // Page number where text is selected
+  bool _showFloatingTextToolbar = false; // Show floating Edit/Copy/Delete toolbar
+  Offset? _floatingToolbarPosition; // Position for floating toolbar
+  Timer? _textSelectionCheckTimer; // Timer to check for text selection
+  Offset? _lastTapPosition; // Last tap position for editText tool
+  DateTime? _lastTapTime; // Last tap time for editText tool
+  
+  // Edit Text mode: All text objects for highlighting
+  List<PDFInlineTextObject>? _allEditableTextObjects; // All text objects on current page
+  int? _editableTextPageIndex; // Page index for which text objects are loaded
+  bool _isLoadingEditableText = false; // Loading state for text extraction
+
+  // Enable text editing mode (used by main FAB)
+  void _enableTextEditing() {
+    setState(() {
+      _isEditingMode = true;
+      _selectedMode = 'text';
+      _isTextEditMode = true;
+      _cursorType = CursorType.text;
+    });
+  }
+
+  // Map logical CursorType to a SystemMouseCursor (no-op on mobile)
+  MouseCursor _getSystemCursorForType() {
+    switch (_cursorType) {
+      case CursorType.text:
+        return SystemMouseCursors.text;
+      case CursorType.pen:
+        return SystemMouseCursors.precise;
+      case CursorType.underline:
+      case CursorType.highlight:
+      case CursorType.strikeThrough:
+        return SystemMouseCursors.click;
+      case CursorType.none:
+      default:
+        return SystemMouseCursors.basic;
+    }
+  }
+  
   
   // View mode and orientation
   String _viewMode = 'vertical'; // 'vertical', 'horizontal', 'page'
@@ -130,48 +213,96 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     switch (_selectedTool) {
       case PdfTool.pen:
         return 'pen';
+      case PdfTool.strike:
+        // Strikethrough uses Syncfusion annotationMode only, no overlay
+        return null;
       case PdfTool.eraser:
         return 'eraser';
       case PdfTool.highlight:
       case PdfTool.underline:
       case PdfTool.copy:
+      case PdfTool.editText:
       case PdfTool.none:
-        // Copy/none should not block PDF viewer gestures
+        // Highlight/underline use Syncfusion annotationMode (accurate alignment)
+        // Copy/editText/none should not block PDF viewer gestures
         return null;
     }
   }
 
   /// Central place to activate a tool and keep state in sync
   void _selectTool(PdfTool tool) {
+    // Initialize undo/redo history when entering edit mode for the first time
+    if (!_isEditingMode && tool != PdfTool.none && _annotationHistory.isEmpty) {
+      // Save initial state when first entering edit mode (async, don't await)
+      _saveAnnotationState();
+    }
+
     setState(() {
       _selectedTool = tool;
       _isEditingMode = tool != PdfTool.none;
 
       // Map enum to internal string mode for existing overlays/text editor
       switch (tool) {
+        case PdfTool.copy:
+          _selectedMode = 'none';
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          // Auto-zoom for easier text selection
+          _zoomInForSelection();
+          _cursorType = CursorType.text;
+          break;
         case PdfTool.pen:
+          // Custom overlay pen drawing, disable SfPdfViewer annotations
           _selectedMode = 'pen';
           _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          _cursorType = CursorType.pen;
           break;
         case PdfTool.highlight:
-          _selectedMode = 'none'; // handled by Syncfusion annotationMode
+          _selectedMode = 'none';
+          // Save state before applying annotation for undo/redo
+          _saveStateBeforeAnnotation();
           _pdfViewerController.annotationMode = PdfAnnotationMode.highlight;
+          // Set up listener to save state after annotation is created
+          _setupAnnotationCompletionListener();
+          _cursorType = CursorType.highlight;
           break;
         case PdfTool.underline:
-          _selectedMode = 'none'; // handled by Syncfusion annotationMode
+          _selectedMode = 'none';
+          // Save state before applying annotation for undo/redo
+          _saveStateBeforeAnnotation();
           _pdfViewerController.annotationMode = PdfAnnotationMode.underline;
+          // Set up listener to save state after annotation is created
+          _setupAnnotationCompletionListener();
+          _cursorType = CursorType.underline;
+          break;
+        case PdfTool.strike:
+          _selectedMode = 'none';
+          // Save state before applying annotation for undo/redo
+          _saveStateBeforeAnnotation();
+          _pdfViewerController.annotationMode = PdfAnnotationMode.strikethrough;
+          // Set up listener to save state after annotation is created
+          _setupAnnotationCompletionListener();
+          _cursorType = CursorType.strikeThrough;
           break;
         case PdfTool.eraser:
           _selectedMode = 'eraser';
           _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          _cursorType = CursorType.none;
           break;
-        case PdfTool.copy:
-          _selectedMode = 'none'; // copy should not interfere with overlay gestures
+        case PdfTool.editText:
+          _selectedMode = 'text';
           _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          _cursorType = CursorType.text;
+          // Start checking for text selection
+          _startTextSelectionCheck();
+          // Load all text objects for highlighting when edit mode is activated
+          _loadAllTextObjectsForEditing();
           break;
         case PdfTool.none:
           _selectedMode = 'none';
           _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          _cursorType = CursorType.none;
+          // Stop checking for text selection
+          _stopTextSelectionCheck();
           break;
       }
 
@@ -179,13 +310,381 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       _isTextEditMode = false;
       _selectedPDFText = null;
       _showTextFormattingToolbar = false;
+      _showFloatingTextToolbar = false;
+      _syncfusionSelectedText = null;
+      _syncfusionSelectionBounds = null;
+      _syncfusionSelectionPage = null;
+      _floatingToolbarPosition = null;
+      _isAddTextToolActive = false;
+      // Note: Syncfusion's text selection will be cleared automatically when user interacts with PDF
+
+      // Save state after annotation is created (when switching away from annotation tool)
+      if (_previousTool != null && 
+          (_previousTool == PdfTool.highlight || 
+           _previousTool == PdfTool.underline || 
+           _previousTool == PdfTool.strike) &&
+          tool != _previousTool) {
+        // User switched away from annotation tool, save state after annotation was created
+        _saveStateAfterAnnotation();
+      }
+
+      _previousTool = tool;
+
+      // Whenever switching tools, turn off add-text mode
+      _isAddTextToolActive = false;
     });
+  }
+
+  /// Persist Syncfusion annotations (highlight/underline) to PDF file
+  Future<void> _persistViewerAnnotations() async {
+    try {
+      final filePath = _actualFilePath ?? widget.filePath;
+      if (filePath.isEmpty) {
+        print('_persistViewerAnnotations: No file path available');
+        return;
+      }
+
+      print('_persistViewerAnnotations: Saving Syncfusion annotations to $filePath');
+      
+      // Save document with annotations
+      // saveDocument returns List<int>, convert to Uint8List
+      List<int>? bytesList;
+      try {
+        // Try saveDocument without parameters first (PdfFlattenOption may not exist in this version)
+        bytesList = await _pdfViewerController.saveDocument();
+      } catch (e) {
+        print('_persistViewerAnnotations: saveDocument failed: $e');
+        return;
+      }
+      
+      if (bytesList == null || bytesList.isEmpty) {
+        print('_persistViewerAnnotations: saveDocument returned null or empty bytes');
+        return;
+      }
+      
+      final bytes = Uint8List.fromList(bytesList);
+      
+      // Write bytes back to the same file
+      final file = File(filePath);
+      await file.writeAsBytes(bytes, flush: true);
+      
+      print('_persistViewerAnnotations: Successfully saved ${bytes.length} bytes to $filePath');
+    } catch (e) {
+      // Non-fatal error - log but don't crash
+      print('_persistViewerAnnotations: Error saving Syncfusion annotations: $e');
+    }
+  }
+
+
+  /// Zoom in when Copy tool is activated for easier text selection
+  void _zoomInForSelection() {
+    // Save current zoom level to restore later
+    _savedZoomLevel = _pdfViewerController.zoomLevel;
+    
+    // Zoom in to 2.0x for easier text selection
+    _pdfViewerController.zoomLevel = 2.0;
+    
+    // Show prompt message
+    _showZoomDemoMessage();
+  }
+
+  /// Show demo message for text selection
+  void _showZoomDemoMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Zooming in for easier text selection. Long press to select text!'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  /// Save state BEFORE annotation tool is selected (to enable undo)
+  Future<void> _saveStateBeforeAnnotation() async {
+    // Cancel any pending save timer
+    _annotationSaveTimer?.cancel();
+    
+    // Save current state before annotation is created
+    await _saveAnnotationState();
+  }
+
+  /// Set up listener to detect when annotation is completed
+  void _setupAnnotationCompletionListener() {
+    // Cancel any existing timer
+    _annotationSaveTimer?.cancel();
+    
+    // We'll save state when user switches tools or when annotation mode changes
+    // This is handled in _selectTool when switching away from annotation tool
+  }
+
+  /// Save state AFTER annotation is created (when user switches tools or annotation completes)
+  void _saveStateAfterAnnotation() {
+    // Cancel any pending timer
+    _annotationSaveTimer?.cancel();
+    
+    // Use a short delay to ensure annotation is saved to document
+    _annotationSaveTimer = Timer(const Duration(milliseconds: 800), () async {
+      await _saveAnnotationState();
+    });
+  }
+
+  /// Save current PDF document state for undo/redo
+  Future<void> _saveAnnotationState() async {
+    try {
+      // Get current document bytes
+      List<int>? bytesList = await _pdfViewerController.saveDocument();
+      if (bytesList == null || bytesList.isEmpty) {
+        print('_saveAnnotationState: Failed to get document bytes');
+        return;
+      }
+
+      final bytes = Uint8List.fromList(bytesList);
+
+      // Verify bytes are valid PDF (should start with %PDF)
+      if (bytes.length < 4 || 
+          String.fromCharCodes(bytes.take(4)) != '%PDF') {
+        print('_saveAnnotationState: Invalid PDF bytes, not saving');
+        return;
+      }
+
+      // Remove any future history if we're not at the end
+      if (_historyIndex < _annotationHistory.length - 1) {
+        _annotationHistory = _annotationHistory.sublist(0, _historyIndex + 1);
+      }
+
+      // Add current state to history
+      _annotationHistory.add(bytes);
+      _historyIndex++;
+
+      // Limit history size to prevent memory issues (keep last 50 states)
+      if (_annotationHistory.length > 50) {
+        _annotationHistory.removeAt(0);
+        _historyIndex--;
+      }
+
+      // Update undo/redo button states
+      setState(() {
+        _canUndo = _historyIndex > 0;
+        _canRedo = false; // Can't redo after a new action
+      });
+
+      print('_saveAnnotationState: Saved state at index $_historyIndex (total: ${_annotationHistory.length}), size: ${bytes.length} bytes');
+    } catch (e) {
+      print('_saveAnnotationState: Error saving state: $e');
+    }
+  }
+
+  /// Undo last annotation change
+  Future<void> _undo() async {
+    if (_historyIndex <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nothing to undo'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+
+    try {
+      _historyIndex--;
+      final previousState = _annotationHistory[_historyIndex];
+
+      // Restore document from saved state
+      await _restoreDocumentState(previousState);
+
+      setState(() {
+        _canUndo = _historyIndex > 0;
+        _canRedo = true;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Undone'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (e) {
+      print('_undo: Error restoring state: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error undoing: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Redo last undone annotation change
+  Future<void> _redo() async {
+    if (_historyIndex >= _annotationHistory.length - 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Nothing to redo'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+      return;
+    }
+
+    try {
+      _historyIndex++;
+      final nextState = _annotationHistory[_historyIndex];
+
+      // Restore document from saved state
+      await _restoreDocumentState(nextState);
+
+      setState(() {
+        _canUndo = true;
+        _canRedo = _historyIndex < _annotationHistory.length - 1;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Redone'),
+          duration: Duration(seconds: 1),
+        ),
+      );
+    } catch (e) {
+      print('_redo: Error restoring state: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error redoing: $e'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  /// Restore PDF document from saved bytes
+  Future<void> _restoreDocumentState(Uint8List bytes) async {
+    try {
+      final filePath = _actualFilePath ?? widget.filePath;
+      if (filePath.isEmpty) {
+        print('_restoreDocumentState: No file path available');
+        return;
+      }
+
+      print('_restoreDocumentState: Starting restore, file size: ${bytes.length} bytes');
+
+      // Cancel any pending annotation save timers
+      _annotationSaveTimer?.cancel();
+
+      // Reset annotation mode and close viewer
+      _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+
+      // First, force close the PDF viewer by incrementing reload key
+      // This ensures the file is released before we write to it
+      if (mounted) {
+        setState(() {
+          _selectedTool = PdfTool.none;
+          _selectedMode = 'none';
+          _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+          // Increment key to close current viewer
+          _pdfReloadKey++;
+        });
+      }
+
+      // Wait longer for viewer to completely close and release file handle
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      // Write bytes to file with explicit flush
+      final file = File(filePath);
+      final raf = await file.open(mode: FileMode.write);
+      try {
+        await raf.writeFrom(bytes);
+        await raf.flush();
+        await raf.close();
+      } catch (e) {
+        await raf.close();
+        rethrow;
+      }
+
+      // Force file system sync
+      await file.writeAsBytes(bytes, flush: true);
+
+      // Wait for file system to fully sync
+      await Future.delayed(const Duration(milliseconds: 400));
+
+      print('_restoreDocumentState: File written, reloading viewer...');
+
+      // Force complete reload of the PDF viewer with new file
+      if (mounted) {
+        setState(() {
+          // Increment reload key again to force complete reload with new file
+          _pdfReloadKey++;
+        });
+      }
+
+      // Wait longer for viewer to fully reload
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      print('_restoreDocumentState: Restored document from ${bytes.length} bytes, reloadKey: $_pdfReloadKey');
+    } catch (e) {
+      print('_restoreDocumentState: Error restoring document: $e');
+      // Fallback: try simpler approach
+      try {
+        // Reset state first
+        if (mounted) {
+          setState(() {
+            _selectedTool = PdfTool.none;
+            _selectedMode = 'none';
+            _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+            _pdfReloadKey++;
+          });
+        }
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+        
+        final file = File(_actualFilePath ?? widget.filePath);
+        await file.writeAsBytes(bytes, flush: true);
+        
+        await Future.delayed(const Duration(milliseconds: 400));
+        
+        if (mounted) {
+          setState(() {
+            _pdfReloadKey++;
+          });
+        }
+        
+        await Future.delayed(const Duration(milliseconds: 500));
+      } catch (e2) {
+        print('_restoreDocumentState: Fallback also failed: $e2');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text('Error restoring: ${e2.toString()}'),
+              duration: const Duration(seconds: 3),
+            ),
+          );
+        }
+      }
+    }
   }
 
   /// Handle tapping the Done button: persist annotations & exit edit mode
   Future<void> _onDoneEditing() async {
     // Cancel any pending debounced reloads
     _pdfReloadDebounceTimer?.cancel();
+    
+    // Cancel any pending annotation save timer
+    _annotationSaveTimer?.cancel();
+    
+    // Save final state if user was using annotation tool
+    if (_previousTool != null && 
+        (_previousTool == PdfTool.highlight || 
+         _previousTool == PdfTool.underline || 
+         _previousTool == PdfTool.strike)) {
+      await _saveAnnotationState();
+    }
+
+    // Restore zoom level if it was changed for Copy tool
+    if (_savedZoomLevel != null) {
+      _pdfViewerController.zoomLevel = _savedZoomLevel!;
+      _savedZoomLevel = null;
+    }
+
+    // Persist Syncfusion annotations (highlight/underline) BEFORE exiting edit mode
+    await _persistViewerAnnotations();
 
     // Persist custom overlay annotations snapshot via storage service if possible
     try {
@@ -194,7 +693,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       }
     } catch (e) {
       // Non-fatal; we still exit edit mode but log the error
-      print('Error saving annotations on Done: $e');
+      print('Error saving overlay annotations on Done: $e');
     }
 
     if (!mounted) return;
@@ -204,6 +703,11 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       _selectedTool = PdfTool.none;
       _selectedMode = 'none';
       _pdfViewerController.annotationMode = PdfAnnotationMode.none;
+      // Clear undo/redo history when exiting edit mode
+      _annotationHistory.clear();
+      _historyIndex = -1;
+      _canUndo = false;
+      _canRedo = false;
       // Reload PDF when exiting edit mode to show all saved annotations
       _pdfReloadKey++;
     });
@@ -214,6 +718,147 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         content: Text('All changes saved'),
         backgroundColor: Colors.green,
         duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Start checking for text selection (when editText tool is active)
+  void _startTextSelectionCheck() {
+    _stopTextSelectionCheck(); // Stop any existing timer
+    _textSelectionCheckTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
+      _checkForTextSelection();
+    });
+  }
+
+  /// Stop checking for text selection
+  void _stopTextSelectionCheck() {
+    _textSelectionCheckTimer?.cancel();
+    _textSelectionCheckTimer = null;
+  }
+
+  /// Check if text is currently selected in Syncfusion PDF viewer
+  void _checkForTextSelection() {
+    if (_selectedTool != PdfTool.editText || !mounted) return;
+    
+    try {
+      // Try to get selected text from controller
+      // Note: Syncfusion may not expose this directly, so we'll use a workaround
+      // We'll detect selection by checking if user has selected text via long-press
+      // For now, we'll use the tap-based detection as fallback
+      
+      // The actual implementation would need to use Syncfusion's text selection API
+      // Since that's not directly available, we'll rely on the tap-based detection
+      // which already works well
+    } catch (e) {
+      print('Error checking text selection: $e');
+    }
+  }
+
+  /// Handle when user taps on selected text (shows floating toolbar)
+  void _onSelectedTextTapped(Offset position) {
+    if (_syncfusionSelectedText == null || _syncfusionSelectedText!.isEmpty) return;
+    
+    setState(() {
+      _showFloatingTextToolbar = true;
+      // Position toolbar near the tap position
+      final screenSize = MediaQuery.of(context).size;
+      _floatingToolbarPosition = Offset(
+        position.dx.clamp(16.0, screenSize.width - 200),
+        (position.dy - 80).clamp(16.0, screenSize.height - 200),
+      );
+    });
+  }
+
+  /// Handle Edit button from floating toolbar
+  void _onFloatingEditPressed() {
+    if (_syncfusionSelectedText == null || _syncfusionSelectedText!.isEmpty) return;
+    if (_syncfusionSelectionBounds == null || _syncfusionSelectionPage == null) return;
+    
+    // Convert Syncfusion selection to our SelectedPDFText format
+    // Create SelectedPDFText from the selected text
+    setState(() {
+      _showFloatingTextToolbar = false;
+      
+      // Create SelectedPDFText object for formatting toolbar
+      _selectedPDFText = SelectedPDFText(
+        text: _syncfusionSelectedText!,
+        bounds: _syncfusionSelectionBounds!,
+        pageIndex: _syncfusionSelectionPage!,
+        position: _syncfusionSelectionBounds!.topLeft,
+        fontSize: 12.0,
+        color: Colors.black,
+        fontFamily: null,
+        isBold: false,
+        isItalic: false,
+        isUnderline: false,
+      );
+      
+      // Initialize text editor controller
+      _textEditorController.setInitialText(_syncfusionSelectedText!);
+      
+      // Show formatting toolbar at bottom
+      _showTextFormattingToolbar = true;
+      _isTextEditMode = true;
+      _selectedMode = 'text';
+      
+      // Update undo/redo state
+      _canUndoText = _textEditorController.canUndo;
+      _canRedoText = _textEditorController.canRedo;
+    });
+    
+    // objectId is already stored when floating toolbar was shown (in _handlePDFTextTap)
+  }
+
+  /// Handle Copy button from floating toolbar
+  void _onFloatingCopyPressed() {
+    if (_syncfusionSelectedText == null || _syncfusionSelectedText!.isEmpty) return;
+    
+    Clipboard.setData(ClipboardData(text: _syncfusionSelectedText!));
+    setState(() {
+      _showFloatingTextToolbar = false;
+      _syncfusionSelectedText = null;
+    });
+    
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Text copied to clipboard'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  /// Handle Delete button from floating toolbar
+  void _onFloatingDeletePressed() {
+    if (_syncfusionSelectedText == null || _syncfusionSelectedText!.isEmpty) return;
+    
+    // Show confirmation dialog
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Text'),
+        content: const Text('Are you sure you want to delete the selected text?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              // Delete text by replacing with empty string
+              if (_syncfusionSelectionBounds != null && _syncfusionSelectionPage != null) {
+                final tapPosition = _syncfusionSelectionBounds!.center;
+                // This will be handled by the text editing flow
+                setState(() {
+                  _showFloatingTextToolbar = false;
+                  _syncfusionSelectedText = null;
+                });
+              }
+            },
+            style: TextButton.styleFrom(foregroundColor: Colors.red),
+            child: const Text('Delete'),
+          ),
+        ],
       ),
     );
   }
@@ -265,12 +910,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   @override
   void dispose() {
     // Cancel all timers
+    _stopTextSelectionCheck();
     _loadingTimeoutTimer?.cancel();
     _hidePageIndicatorTimer?.cancel();
     _scrollCheckTimer?.cancel();
     _pdfReloadDebounceTimer?.cancel();
     _textPreviewDebounceTimer?.cancel();
     _formattingDebounceTimer?.cancel();
+    _annotationSaveTimer?.cancel();
     _stopScrollCheckTimer();
     
     // Reset orientation to allow all orientations when leaving the screen
@@ -613,15 +1260,28 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     print('PDFViewer: Document loaded successfully, pages: ${details.document.pages.count}');
     _loadingTimeoutTimer?.cancel();
     if (mounted) {
+      // Build per-page sizes list (supports varying page sizes)
+      final pageSizes = <Size>[];
+      for (int i = 0; i < details.document.pages.count; i++) {
+        try {
+          final page = details.document.pages[i];
+          final size = Size(page.size.width, page.size.height);
+          pageSizes.add(size);
+        } catch (e) {
+          // Fallback to default if page size unavailable
+          pageSizes.add(const Size(612, 792));
+        }
+      }
+      
       setState(() {
         _totalPages = details.document.pages.count;
         _isLoading = false;
         _errorMessage = null; // Clear any previous errors
+        _pdfPageSizes = pageSizes; // Store per-page sizes
         
-        // Get page size for annotation coordinate system
-        if (details.document.pages.count > 0) {
-          final firstPage = details.document.pages[0];
-          _pdfPageSize = Size(firstPage.size.width, firstPage.size.height);
+        // Get page size for annotation coordinate system (fallback for first page)
+        if (pageSizes.isNotEmpty) {
+          _pdfPageSize = pageSizes[0]; // Fallback for first page
         }
       });
       
@@ -819,28 +1479,75 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         builder: (context, constraints) {
           final viewerSize = constraints.biggest;
           
-          // Inline text editing is disabled; we still wrap in GestureDetector to keep
-          // the structure, but we don't intercept taps for text editing anymore.
-          return GestureDetector(
-            behavior: HitTestBehavior.translucent,
-            child: SfPdfViewer.file(
-              file,
-              key: ValueKey('pdf_viewer_${filePath}_$_viewMode$_pdfReloadKey'),
-              controller: _pdfViewerController,
-              onDocumentLoaded: _onDocumentLoaded,
-              onDocumentLoadFailed: _onDocumentLoadFailed,
-              onPageChanged: _onPageChanged,
-              scrollDirection: _getScrollDirection(),
-              pageLayoutMode: _getPageLayoutMode(),
-              enableDoubleTapZooming: true,
-              enableTextSelection: true,
-            ),
-          );
+          // Store viewer size for overlay coordinate conversion
+          // This ensures annotations use actual viewer dimensions, not full screen
+          return _buildPdfViewerWithOverlay(file, viewerSize);
         },
       ),
     );
     
     return pdfViewer;
+  }
+
+  /// Build PDF viewer with overlay, using actual viewer size from LayoutBuilder
+  Widget _buildPdfViewerWithOverlay(File file, Size viewerSize) {
+    final pdfViewer = SfPdfViewer.file(
+      file,
+      key: ValueKey('pdf_viewer_${file.path}_$_viewMode$_pdfReloadKey'),
+      controller: _pdfViewerController,
+      pageSpacing: _pageSpacing,
+      enableTextSelection: true,
+      enableDoubleTapZooming: true,
+      onDocumentLoaded: _onDocumentLoaded,
+      onDocumentLoadFailed: _onDocumentLoadFailed,
+      onPageChanged: _onPageChanged,
+      scrollDirection: _getScrollDirection(),
+      pageLayoutMode: _getPageLayoutMode(),
+    );
+
+    // Always use TextAwareAnnotationOverlay for custom tools (pen, highlight, underline, eraser)
+    Widget overlay = TextAwareAnnotationOverlay(
+      key: _textAwareOverlayKey,
+      pdfPath: _actualFilePath ?? widget.filePath,
+      currentPage: _currentPage - 1, // Convert to 0-based
+      pageSizes: _pdfPageSizes.isNotEmpty ? _pdfPageSizes : [_pdfPageSize ?? const Size(612, 792)], // Per-page sizes
+      zoomLevel: _zoomLevel,
+      scrollOffsetY: _pdfScrollOffsetY, // Y offset from SfPdfViewer callback
+      pageSpacing: _pageSpacing,
+      viewerSize: viewerSize, // Actual viewer size from LayoutBuilder
+      selectedTool: _selectedOverlayTool,
+      toolColor: _selectedColor,
+      strokeWidth: _strokeWidth,
+      onAnnotationsChanged: (annotations) {
+        setState(() {
+          _savedAnnotations = annotations;
+        });
+      },
+      onUndoStateChanged: (canUndo) {
+        setState(() {
+          _canUndo = canUndo;
+        });
+      },
+      onRedoStateChanged: (canRedo) {
+        setState(() {
+          _canRedo = canRedo;
+        });
+      },
+      child: pdfViewer,
+    );
+    
+    // Add editable text highlights overlay when editText mode is active
+    if (_selectedTool == PdfTool.editText && _allEditableTextObjects != null && _allEditableTextObjects!.isNotEmpty) {
+      overlay = Stack(
+        children: [
+          overlay,
+          // Editable text highlights overlay
+          _buildEditableTextHighlightsOverlay(viewerSize),
+        ],
+      );
+    }
+    
+    return overlay;
   }
 
   void _onPageChanged(PdfPageChangedDetails details) {
@@ -873,9 +1580,183 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               }
             });
           }
+          
+          // Reload editable text objects if editText mode is active
+          if (_selectedTool == PdfTool.editText) {
+            _loadAllTextObjectsForEditing();
+          }
         }
       });
     }
+  }
+  
+  /// Load all text objects from current page for highlighting in edit mode
+  Future<void> _loadAllTextObjectsForEditing() async {
+    if (_isLoadingEditableText) return; // Prevent duplicate loads
+    
+    final pageIndex = _currentPage - 1; // Convert to 0-based
+    if (pageIndex < 0) return;
+    
+    // Skip if already loaded for this page
+    if (_editableTextPageIndex == pageIndex && _allEditableTextObjects != null) {
+      return;
+    }
+    
+    setState(() {
+      _isLoadingEditableText = true;
+    });
+    
+    try {
+      final pdfPath = _actualFilePath ?? widget.filePath;
+      final textObjects = await PDFInlineTextEditorService.getAllTextObjects(pdfPath, pageIndex);
+      
+      if (mounted) {
+        setState(() {
+          _allEditableTextObjects = textObjects;
+          _editableTextPageIndex = pageIndex;
+          _isLoadingEditableText = false;
+        });
+        print('_loadAllTextObjectsForEditing: Loaded ${textObjects.length} text objects for page $pageIndex');
+      }
+    } catch (e) {
+      print('_loadAllTextObjectsForEditing: Error loading text objects: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingEditableText = false;
+        });
+      }
+    }
+  }
+  
+  /// Build overlay that highlights all editable text when editText mode is active
+  Widget _buildEditableTextHighlightsOverlay(Size viewerSize) {
+    if (_allEditableTextObjects == null || _allEditableTextObjects!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    final pageIndex = _currentPage - 1;
+    if (_editableTextPageIndex != pageIndex) {
+      return const SizedBox.shrink();
+    }
+    
+    // Get page size for coordinate conversion
+    final pageSize = _pdfPageSizes.isNotEmpty && pageIndex < _pdfPageSizes.length
+        ? _pdfPageSizes[pageIndex]
+        : (_pdfPageSize ?? const Size(612, 792));
+    
+    return Positioned.fill(
+      child: CustomPaint(
+        painter: _EditableTextHighlightsPainter(
+          textObjects: _allEditableTextObjects!,
+          pageIndex: pageIndex,
+          pageSize: pageSize,
+          zoomLevel: _zoomLevel,
+          scrollOffsetY: _pdfScrollOffsetY,
+          pageSpacing: _pageSpacing,
+          viewerSize: viewerSize,
+        ),
+        child: GestureDetector(
+          behavior: HitTestBehavior.translucent,
+          onTapDown: (details) {
+            // Find which text object was tapped
+            final tapPoint = details.localPosition;
+            _findTappedTextObject(tapPoint, viewerSize, pageSize);
+          },
+        ),
+      ),
+    );
+  }
+  
+  /// Find which text object was tapped and open editor
+  void _findTappedTextObject(Offset screenTap, Size viewerSize, Size pageSize) {
+    if (_allEditableTextObjects == null || _allEditableTextObjects!.isEmpty) return;
+    
+    final pageIndex = _currentPage - 1;
+    
+    // Convert screen coordinates to PDF coordinates
+    // Use same conversion logic as _handlePDFTextTap for consistency
+    final scaleX = pageSize.width / viewerSize.width;
+    final scaleY = pageSize.height / (viewerSize.height / _zoomLevel);
+    
+    // Account for scroll offset
+    final pdfX = screenTap.dx * scaleX;
+    final pdfY = (screenTap.dy + _pdfScrollOffsetY) * scaleY;
+    
+    // Text objects from PDFInlineTextEditorService use top-left origin
+    // So pdfY is already in top-left coordinate system
+    final pdfBoxY = pdfY;
+    
+    // Find closest text object
+    PDFInlineTextObject? tappedObject;
+    double minDistance = double.infinity;
+    const tolerance = 30.0;
+    
+    for (final obj in _allEditableTextObjects!) {
+      if (obj.pageIndex != pageIndex) continue;
+      
+      // Check if tap is within text bounds (with tolerance)
+      final withinX = pdfX >= obj.x - tolerance && pdfX <= obj.x + obj.width + tolerance;
+      final withinY = pdfBoxY >= obj.y - tolerance && pdfBoxY <= obj.y + obj.height + tolerance;
+      
+      if (withinX && withinY) {
+        // Calculate distance from tap to text center
+        final textCenterX = obj.x + obj.width / 2;
+        final textCenterY = obj.y + obj.height / 2;
+        final distance = math.sqrt(
+          math.pow(textCenterX - pdfX, 2) + math.pow(textCenterY - pdfBoxY, 2)
+        );
+        
+        if (distance < minDistance) {
+          minDistance = distance;
+          tappedObject = obj;
+        }
+      }
+    }
+    
+    if (tappedObject != null) {
+      _onEditableTextTap(tappedObject);
+    }
+  }
+  
+  /// Handle tap on editable text - open editor directly
+  void _onEditableTextTap(PDFInlineTextObject textObject) {
+    print('_onEditableTextTap: Tapped on text "${textObject.text}" at (${textObject.x}, ${textObject.y})');
+    
+    // Convert PDFInlineTextObject to SelectedPDFText
+    final bounds = Rect.fromLTWH(
+      textObject.x,
+      textObject.y,
+      textObject.width,
+      textObject.height,
+    );
+    
+    setState(() {
+      _selectedPDFText = SelectedPDFText(
+        text: textObject.text,
+        bounds: bounds,
+        pageIndex: textObject.pageIndex,
+        position: bounds.topLeft,
+        fontSize: textObject.fontSize,
+        color: textObject.color,
+        fontFamily: textObject.fontName,
+        isBold: false, // Could parse from fontName
+        isItalic: false,
+        isUnderline: false,
+      );
+      _selectedPDFTextObjectId = textObject.objectId;
+      
+      // Initialize text editor controller
+      _textEditorController.setInitialText(textObject.text);
+      
+      // Show formatting toolbar at bottom
+      _showTextFormattingToolbar = true;
+      _isTextEditMode = true;
+      _selectedMode = 'text';
+      
+      // Update undo/redo state
+      _canUndoText = _textEditorController.canUndo;
+      _canRedoText = _textEditorController.canRedo;
+    });
   }
 
   void _scrollToCurrentPage() {
@@ -1121,46 +2002,20 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         child: Stack(
           children: [
             // PDF Viewer with text-aware annotation overlay
-            TextAwareAnnotationOverlay(
-            key: _textAwareOverlayKey,
-            pdfPath: _actualFilePath ?? widget.filePath,
-            currentPage: _currentPage - 1, // Convert to 0-based
-            pageSize: _pdfPageSize ?? Size(612, 792), // Default US Letter if not loaded
-            zoomLevel: _zoomLevel,
-            scrollOffset: Offset(0, _pdfScrollOffset),
-            screenSize: MediaQuery.of(context).size,
-            selectedTool: _selectedOverlayTool,
-            toolColor: _selectedColor,
-            strokeWidth: _strokeWidth,
-            onAnnotationsChanged: (annotations) {
-              setState(() {
-                _savedAnnotations = annotations;
-              });
-            },
-            onUndoStateChanged: (canUndo) {
-              setState(() {
-                _canUndo = canUndo;
-              });
-            },
-            onRedoStateChanged: (canRedo) {
-              setState(() {
-                _canRedo = canRedo;
-              });
-            },
-            child: NotificationListener<ScrollNotification>(
+            // Overlay is built inside _buildPDFViewer() via LayoutBuilder to get viewerSize
+            NotificationListener<ScrollNotification>(
               onNotification: (notification) {
-                // Detect when user scrolls manually and update preview bar
+                // Only track scroll for page preview bar UI updates, NOT for annotation positioning
+                // Annotation positioning uses SfPdfViewer.onScrollChanged callback
                 if (notification is ScrollStartNotification) {
-                  // Start periodic checks during scrolling
                   _isScrolling = true;
                   _startScrollCheckTimer();
                 } else if (notification is ScrollUpdateNotification) {
-                  // Update during scroll for real-time feedback
                   _isScrolling = true;
-                  // Track scroll offset for annotation positioning
+                  // Update scroll offset for annotation positioning (fallback if callbacks don't exist)
                   if (mounted) {
                     setState(() {
-                      _pdfScrollOffset = notification.metrics.pixels;
+                      _pdfScrollOffsetY = notification.metrics.pixels;
                     });
                   }
                   Future.delayed(const Duration(milliseconds: 50), () {
@@ -1169,26 +2024,85 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                     }
                   });
                 } else if (notification is ScrollEndNotification) {
-                  // Stop periodic checks and do final update
-                  _isScrolling = false;
-                  _stopScrollCheckTimer();
                   // Update final scroll offset
                   if (mounted) {
                     setState(() {
-                      _pdfScrollOffset = notification.metrics.pixels;
+                      _pdfScrollOffsetY = notification.metrics.pixels;
                     });
                   }
+                  _isScrolling = false;
+                  _stopScrollCheckTimer();
                   Future.delayed(const Duration(milliseconds: 150), () {
                     if (mounted) {
                       _updateCurrentPageFromScroll();
                     }
                   });
                 }
-                return false;
+                return false; // Allow notification to continue propagating
               },
-            child: _buildPDFViewer(),
+              child: MouseRegion(
+                cursor: _getSystemCursorForType(),
+                child: _selectedTool == PdfTool.editText
+                    ? // When editText is active, use Listener to detect taps without blocking Syncfusion's text selection
+                      Listener(
+                        onPointerDown: (event) {
+                          // Store tap position for later use
+                          _lastTapPosition = event.localPosition;
+                          _lastTapTime = DateTime.now();
+                        },
+                        onPointerUp: (event) {
+                          // Only handle as tap if it was quick (not a long-press for selection)
+                          final now = DateTime.now();
+                          final tapPosition = _lastTapPosition; // Capture before clearing
+                          final tapTime = _lastTapTime; // Capture before clearing
+                          
+                          // Clear immediately to avoid stale data
+                          _lastTapPosition = null;
+                          _lastTapTime = null;
+                          
+                          if (tapTime != null && 
+                              tapPosition != null &&
+                              now.difference(tapTime).inMilliseconds < 300) {
+                            // Quick tap - check for text at this position
+                            Future.delayed(const Duration(milliseconds: 100), () {
+                              // Small delay to let Syncfusion's selection complete first
+                              if (mounted && _selectedTool == PdfTool.editText) {
+                                _handleTextEditTap(tapPosition);
+                              }
+                            });
+                          }
+                        },
+                        child: _buildPDFViewer(),
+                      )
+                    : // For other tools, use GestureDetector for tap handling
+                      GestureDetector(
+                        behavior: HitTestBehavior.translucent,
+                        onTapUp: (details) {
+                          final tapPos = details.localPosition;
+                          if (_isAddTextToolActive && _selectedMode == 'text_add') {
+                            // T tool active: add new text at tap position
+                            _showTextEditDialog(
+                              initialText: '',
+                              position: tapPos,
+                              isEditing: false,
+                            );
+                          } else {
+                            // Default behavior: tap-to-edit existing text
+                            _handleTextEditTap(tapPos);
+                          }
+                        },
+                        child: _buildPDFViewer(),
+                      ),
+              ),
             ),
-          ),
+          // Floating toolbar (appears when text is selected via Syncfusion selection)
+          if (_showFloatingTextToolbar && _syncfusionSelectedText != null && _floatingToolbarPosition != null)
+            Positioned(
+              left: _floatingToolbarPosition!.dx,
+              top: _floatingToolbarPosition!.dy,
+              child: _buildFloatingTextToolbar(),
+            ),
+          
           // Text formatting toolbar (appears when text is selected - Sejda-style)
           // Positioned at bottom to always be visible and accessible
           if (_showTextFormattingToolbar && _selectedPDFText != null)
@@ -1202,12 +2116,14 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                   text: _selectedPDFText!.text,
                   isBold: _selectedPDFText!.isBold,
                   isItalic: _selectedPDFText!.isItalic,
+                  isUnderline: _selectedPDFText!.isUnderline,
                   fontFamily: _selectedPDFText!.fontFamily,
                   fontSize: _selectedPDFText!.fontSize,
                   textColor: _selectedPDFText!.color,
                   onTextChanged: (newText) => _updateTextContentPreview(newText), // Update preview only
                   onBoldChanged: (isBold) => _applyTextFormatting(isBold: isBold),
                   onItalicChanged: (isItalic) => _applyTextFormatting(isItalic: isItalic),
+                  onUnderlineChanged: (isUnderline) => _applyTextFormatting(isUnderline: isUnderline),
                   onFontChanged: (font) => _applyTextFormatting(fontFamily: font),
                   onFontSizeChanged: (size) => _applyTextFormatting(fontSize: size),
                   onColorChanged: (color) => _applyTextFormatting(color: color),
@@ -1272,16 +2188,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       floatingActionButton: _isEditingMode
           ? null
           : FloatingActionButton(
-              onPressed: () {
-                setState(() {
-                  _isEditingMode = true;
-                });
-              },
+              onPressed: _enableTextEditing,
               backgroundColor: const Color(0xFF1976D2),
               child: const Icon(Icons.edit, color: Colors.white),
             ),
       bottomNavigationBar: _isEditingMode
-          ? _buildEditingToolbar()
+          ? _buildReferenceToolbar()
           : (_totalPages > 0 && _showPagePreview
               ? _buildPagePreviewBar()
               : null),
@@ -1294,10 +2206,13 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         return Colors.yellow.withOpacity(0.4);
       case PdfTool.underline:
         return Colors.blue;
+      case PdfTool.strike:
+        return Colors.redAccent;
       case PdfTool.eraser:
         return Colors.white;
       case PdfTool.pen:
       case PdfTool.copy:
+      case PdfTool.editText:
       case PdfTool.none:
         return _selectedColor;
     }
@@ -1309,222 +2224,297 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         return 15.0; // Thicker for highlight
       case PdfTool.underline:
         return 2.0; // Thin line for underline
+      case PdfTool.strike:
+        return 2.0; // Similar to underline
       case PdfTool.eraser:
         return 20.0; // Larger eraser
       case PdfTool.pen:
       case PdfTool.copy:
+      case PdfTool.editText:
       case PdfTool.none:
         return _strokeWidth;
     }
   }
 
-  Widget _buildEditingToolbar() {
-    // CRITICAL FIX: Get system insets to account for navigation bar height
-    // On gesture navigation devices (Android 13-14), this is typically ~23px
+  /// New reference-style bottom toolbar (icon-only, matches provided design)
+  Widget _buildReferenceToolbar() {
     final mediaQuery = MediaQuery.of(context);
-    final bottomPadding = mediaQuery.padding.bottom; // System navigation bar height
-    final bottomViewInsets = mediaQuery.viewInsets.bottom; // Keyboard height (if visible)
-    
-    // Total bottom inset = system padding + view insets (keyboard)
-    final totalBottomInset = bottomPadding + bottomViewInsets;
-    
+    final bottomPadding = mediaQuery.padding.bottom;
+
     return Container(
-      // Dynamic height: base height (70) + system navigation bar padding
-      // This ensures toolbar is never cut off on any Android version
-      padding: EdgeInsets.only(bottom: bottomPadding),
       decoration: BoxDecoration(
         color: Colors.white,
+        border: const Border(
+          top: BorderSide(color: Color(0xFFE0E0E0), width: 1), // subtle top divider
+        ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 10,
-            offset: const Offset(0, -5),
+            color: Colors.black.withOpacity(0.03),
+            blurRadius: 4,
+            offset: const Offset(0, -2),
           ),
         ],
       ),
-      child: SizedBox(
-        // Base toolbar height (70) - padding is already applied to parent Container
-        height: 70,
+      height: 56.0 + bottomPadding,
+      padding: EdgeInsets.only(bottom: bottomPadding),
+      child: Center(
+        // Wrap in horizontal scroll view to avoid overflow on small screens
         child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            mainAxisSize: MainAxisSize.min,
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-          // Undo button
-          _buildToolButton(
-            icon: Icons.undo,
-            label: 'Undo',
-            isSelected: false,
-            onTap: _canUndo
-                ? () {
-                  // Try TextAwareAnnotationOverlay first (new system)
-                  _textAwareOverlayKey.currentState?.undo();
-                  // Fallback to old overlay if needed
-                  _annotationOverlayKey.currentState?.undo();
-                }
-                : null,
+          // 1) Undo
+          IconButton(
+            iconSize: 26,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: Icon(
+              Icons.undo,
+              size: 26,
+              color: _canUndo ? const Color(0xFF4A4A4A) : Colors.grey[300],
+            ),
+            onPressed: _canUndo ? _undo : null,
+            tooltip: 'Undo',
           ),
-          // Redo button
-          _buildToolButton(
-            icon: Icons.redo,
-            label: 'Redo',
-            isSelected: false,
-            onTap: _canRedo
-                ? () {
-                  // Try TextAwareAnnotationOverlay first (new system)
-                  _textAwareOverlayKey.currentState?.redo();
-                  // Fallback to old overlay if needed
-                  _annotationOverlayKey.currentState?.redo();
-                }
-                : null,
+
+          // 2) Redo
+          IconButton(
+            iconSize: 26,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: Icon(
+              Icons.redo,
+              size: 26,
+              color: _canRedo ? const Color(0xFF4A4A4A) : Colors.grey[300],
+            ),
+            onPressed: _canRedo ? _redo : null,
+            tooltip: 'Redo',
           ),
-          // Copy text button
-          _buildToolButton(
+
+          // 3) Copy
+          _buildRefToolIcon(
             icon: Icons.content_copy,
-            label: 'Copy',
-            isSelected: _selectedTool == PdfTool.copy,
+            tool: PdfTool.copy,
             onTap: () {
-              // If Copy is already active and we have text, perform copy immediately
-              if (_selectedTool == PdfTool.copy && _selectedPDFText != null) {
+              if (_selectedPDFText != null) {
                 _copySelectedText();
-                return;
-              }
-
-              // Activate copy tool (does not engage drawing overlay)
-              _selectTool(PdfTool.copy);
-
-              if (_selectedPDFText == null) {
+              } else {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
-                    content: Text('Long‑press text in the PDF to select it, then tap Copy again.'),
+                    content: Text('Long press to select text first'),
                     duration: Duration(seconds: 2),
                   ),
                 );
               }
+              _selectTool(PdfTool.copy);
             },
           ),
-          // Pen tool
-          _buildToolButton(
-            icon: Icons.edit,
-            label: 'Pen',
-            isSelected: _selectedTool == PdfTool.pen,
-            onTap: () {
-              _selectTool(PdfTool.pen);
-            },
-          ),
-          // Highlight tool
-          _buildToolButton(
-            icon: Icons.highlight,
-            label: 'Highlight',
-            isSelected: _selectedTool == PdfTool.highlight,
-            onTap: () {
-              _selectTool(PdfTool.highlight);
-            },
-          ),
-          // Underline tool
-          _buildToolButton(
+
+          // 4) Underline
+          _buildRefToolIcon(
             icon: Icons.format_underline,
-            label: 'Underline',
-            isSelected: _selectedTool == PdfTool.underline,
+            tool: PdfTool.underline,
+            onTap: () => _selectTool(PdfTool.underline),
+          ),
+
+          // 5) StrikeThrough
+          _buildRefToolIcon(
+            icon: Icons.format_strikethrough,
+            tool: PdfTool.strike,
+            onTap: () => _selectTool(PdfTool.strike),
+          ),
+
+          // 6) Highlight
+          _buildRefToolIcon(
+            icon: Icons.highlight,
+            tool: PdfTool.highlight,
+            onTap: () => _selectTool(PdfTool.highlight),
+          ),
+
+          // 7) Pen
+          _buildRefToolIcon(
+            icon: Icons.create,
+            tool: PdfTool.pen,
+            onTap: () => _selectTool(PdfTool.pen),
+          ),
+
+          // 8) Edit Text – select and edit existing text (using text_fields icon to distinguish from pen)
+          _buildRefToolIcon(
+            icon: Icons.text_fields,
+            tool: PdfTool.editText,
             onTap: () {
-              _selectTool(PdfTool.underline);
+              _selectTool(PdfTool.editText);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Long press and drag to select text, then tap to edit'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
             },
           ),
-          // Eraser tool
-          _buildToolButton(
-            icon: Icons.cleaning_services,
-            label: 'Eraser',
-            isSelected: _selectedTool == PdfTool.eraser,
-            onTap: () {
-              _selectTool(PdfTool.eraser);
-            },
+
+          // 9) Text (T) – add new text to PDF
+          _buildAddTextToolIcon(),
+
+          // 9) Done (check) – blue tick as in reference
+          IconButton(
+            iconSize: 26,
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+            icon: Icon(
+              Icons.check,
+              size: 26,
+              color: const Color(0xFF2F6BFF), // blue tick
+            ),
+            onPressed: _onDoneEditing,
+            tooltip: 'Done',
           ),
-          // Done button
-          _buildToolButton(
-            icon: Icons.check,
-            label: 'Done',
-            isSelected: false,
-            onTap: () {
-              _onDoneEditing();
-            },
-            color: Colors.green,
+            ],
           ),
-          ],
         ),
-      ),
       ),
     );
   }
 
-  Widget _buildToolButton({
+  /// Single icon-only tool, matching reference style
+  Widget _buildRefToolIcon({
+    required IconData icon,
+    required PdfTool tool,
+    required VoidCallback onTap,
+  }) {
+    const double iconSize = 26.0;
+    const Color defaultColor = Color(0xFF4A4A4A); // medium-dark gray as in reference
+    const Color selectedColor = Color(0xFF2F6BFF); // blue when active
+
+    final bool isSelected = _selectedTool == tool;
+
+    return IconButton(
+      onPressed: onTap,
+      iconSize: iconSize,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+      icon: Icon(
+        icon,
+        size: iconSize,
+        color: isSelected ? selectedColor : defaultColor,
+      ),
+    );
+  }
+
+  /// Build floating toolbar (Edit/Copy/Delete) that appears when text is selected
+  Widget _buildFloatingTextToolbar() {
+    return Material(
+      elevation: 8,
+      borderRadius: BorderRadius.circular(8),
+      color: const Color(0xFF424242), // Dark gray like in the image
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Edit button
+            _buildFloatingToolbarButton(
+              icon: Icons.edit,
+              label: 'Edit',
+              onPressed: _onFloatingEditPressed,
+            ),
+            const SizedBox(width: 4),
+            // Copy button
+            _buildFloatingToolbarButton(
+              icon: Icons.content_copy,
+              label: 'Copy',
+              onPressed: _onFloatingCopyPressed,
+            ),
+            const SizedBox(width: 4),
+            // Delete button
+            _buildFloatingToolbarButton(
+              icon: Icons.delete,
+              label: 'Delete',
+              onPressed: _onFloatingDeletePressed,
+              isDestructive: true,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Build a single button for the floating toolbar
+  Widget _buildFloatingToolbarButton({
     required IconData icon,
     required String label,
-    required bool isSelected,
-    required VoidCallback? onTap,
-    Color? color,
+    required VoidCallback onPressed,
+    bool isDestructive = false,
   }) {
-    // Determine button color based on tool type
-    Color buttonColor;
-    if (color != null) {
-      buttonColor = color;
-    } else {
-      switch (_selectedTool) {
-        case PdfTool.pen:
-          buttonColor = Colors.red;
-          break;
-        case PdfTool.highlight:
-          buttonColor = Colors.yellow[700]!;
-          break;
-        case PdfTool.underline:
-          buttonColor = Colors.blue;
-          break;
-        case PdfTool.eraser:
-          buttonColor = Colors.orange;
-          break;
-        case PdfTool.copy:
-        case PdfTool.none:
-          buttonColor = Colors.grey[700]!;
-      }
-    }
-    
-    final isEnabled = onTap != null;
-    return Opacity(
-      opacity: isEnabled ? 1.0 : 0.5,
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: isEnabled ? onTap : null,
-          borderRadius: BorderRadius.circular(8),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: isSelected ? buttonColor.withOpacity(0.15) : Colors.transparent,
-              borderRadius: BorderRadius.circular(8),
-              border: isSelected ? Border.all(color: buttonColor.withOpacity(0.3), width: 1) : null,
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  color: isSelected ? buttonColor : (isEnabled ? Colors.grey[700] : Colors.grey[400]),
-                  size: 24,
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onPressed,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: isDestructive ? Colors.red[300] : Colors.white,
+              ),
+              const SizedBox(width: 6),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isDestructive ? Colors.red[300] : Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  label,
-                  style: TextStyle(
-                    color: isSelected ? buttonColor : (isEnabled ? Colors.grey[700] : Colors.grey[400]),
-                    fontSize: 11,
-                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
         ),
       ),
+    );
+  }
+
+  /// Icon for the "T" add-text tool (toggles add-text mode)
+  Widget _buildAddTextToolIcon() {
+    const double iconSize = 26.0;
+    const Color defaultColor = Color(0xFF4A4A4A);
+    const Color selectedColor = Color(0xFF2F6BFF);
+
+    return IconButton(
+      onPressed: () {
+        setState(() {
+          // Toggle add-text mode
+          _isAddTextToolActive = !_isAddTextToolActive;
+          _selectedMode = _isAddTextToolActive ? 'text_add' : 'none';
+          _isTextEditMode = _isAddTextToolActive;
+          if (_isAddTextToolActive) {
+            _cursorType = CursorType.text;
+          }
+        });
+
+        if (_isAddTextToolActive) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Tap on the page where you want to add text'),
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      },
+      iconSize: iconSize,
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+      icon: Icon(
+        Icons.title, // Use "T" icon for adding new text (distinct from text_fields for editing)
+        size: iconSize,
+        color: _isAddTextToolActive ? selectedColor : defaultColor,
+      ),
+      tooltip: 'Add Text',
     );
   }
 
@@ -2277,15 +3267,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   }
 
   Future<void> _handleTextEditTap(Offset position) async {
-    // Allow text editing even if text tool wasn't explicitly selected
-    // This makes it more intuitive - just tap on text to edit
-    if (!_isTextEditMode && _selectedMode != 'text') {
-      // Auto-enable text mode when user taps (more intuitive)
-      setState(() {
-        _selectedMode = 'text';
-        _isTextEditMode = true;
-      });
-    }
+    print('_handleTextEditTap: Called with position=$position, _selectedTool=$_selectedTool');
     
     // Don't allow text editing on scanned documents
     if (_isScannedDocument) {
@@ -2299,11 +3281,33 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       return;
     }
     
+    // If editText tool is not active, auto-enable it for better UX
+    if (_selectedTool != PdfTool.editText) {
+      print('_handleTextEditTap: Auto-enabling editText tool');
+      setState(() {
+        _selectedMode = 'text';
+        _isTextEditMode = true;
+        _selectedTool = PdfTool.editText;
+        _cursorType = CursorType.text;
+      });
+    }
+    
     // Sejda-style: Try to find existing text first
     // If text found → toolbar appears automatically (NO DIALOG)
     // If no text found → just show hint, NO DIALOG
     // Use full screen size here as an approximation of viewer size
-    await _handlePDFTextTap(position, MediaQuery.of(context).size);
+    try {
+      await _handlePDFTextTap(position, MediaQuery.of(context).size);
+    } catch (e) {
+      print('_handleTextEditTap: Error detecting text: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error detecting text: $e'),
+          duration: const Duration(seconds: 2),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
     
     // Sejda-style: NO DIALOG when clicking on text or empty space
     // The toolbar handles all editing inline
@@ -2355,7 +3359,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
         final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
         
         // Account for scroll - screen position is relative to visible viewport
-        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
+        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffsetY;
         
         // Calculate which page this position belongs to (for multi-page vertical scroll)
         final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
@@ -2445,7 +3449,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       position: Offset(
         textAnnotation.position.dx * MediaQuery.of(context).size.width,
         textAnnotation.documentY != null
-            ? textAnnotation.documentY! - _pdfScrollOffset
+            ? textAnnotation.documentY! - _pdfScrollOffsetY
             : textAnnotation.position.dy * MediaQuery.of(context).size.height,
       ),
       isEditing: true,
@@ -2695,7 +3699,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
 
       // 1) Absolute Y in document space (includes scroll)
-      final absoluteDocumentY = screenPosition.dy + _pdfScrollOffset;
+      final absoluteDocumentY = screenPosition.dy + _pdfScrollOffsetY;
 
       // 2) Page index from absolute Y (continuous vertical layout)
       int tappedPageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
@@ -2723,7 +3727,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       
       // DEBUG: Log coordinate conversion values
       print('PDFTextTap DEBUG: screenPosition=(${screenPosition.dx}, ${screenPosition.dy}), '
-          'scrollOffset=$_pdfScrollOffset, '
+          'scrollOffset=$_pdfScrollOffsetY, '
           'absoluteDocumentY=$absoluteDocumentY, '
           'renderedPdfHeight=$renderedPdfHeight, '
           'tappedPageIndex=$tappedPageIndex, '
@@ -2797,6 +3801,26 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       // This is the SINGLE source of truth for selection; no second lookup.
       final bounds = wordQuad.bounds;
 
+      // If editText tool is active, show floating toolbar first (like in the image)
+      if (_selectedTool == PdfTool.editText) {
+        setState(() {
+          _syncfusionSelectedText = wordQuad.text;
+          _syncfusionSelectionBounds = bounds;
+          _syncfusionSelectionPage = wordQuad.pageIndex;
+          // Store objectId for later editing
+          _selectedPDFTextObjectId = wordQuad.objectId;
+          _showFloatingTextToolbar = true;
+          // Position floating toolbar near the selected text
+          final screenSize = MediaQuery.of(context).size;
+          _floatingToolbarPosition = Offset(
+            (screenPosition.dx - 100).clamp(16.0, screenSize.width - 250),
+            (screenPosition.dy - 80).clamp(16.0, screenSize.height - 200),
+          );
+        });
+        return; // Don't show formatting toolbar yet, wait for Edit button
+      }
+
+      // Default behavior: show formatting toolbar directly
       setState(() {
         // Automatically enable text mode when text is found (even if text tool wasn't selected)
         _selectedMode = 'text';
@@ -2815,6 +3839,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
           fontFamily: null,
           isBold: false,
           isItalic: false,
+          isUnderline: false,
         );
         // Store MuPDF objectId for later replacement
         _selectedPDFTextObjectId = wordQuad.objectId;
@@ -2855,12 +3880,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     }
   }
 
-  /// Shared word hit-test using MuPDF text quads (same pipeline as highlight)
+  /// Shared word hit-test using Java PDFBox implementation
   ///
   /// - [pdfTapPoint] is in PDF coordinates (page space, bottom-left origin).
   /// - Returns the TextQuad whose bounds contain the tap, with a small
-  ///   tolerance equivalent to ~4 screen pixels.
-  Future<TextQuad?> _hitTestWordQuadAt({
+  ///   tolerance equivalent to ~20 PDF units.
+  Future<app_models.TextQuad?> _hitTestWordQuadAt({
     required String pdfPath,
     required int pageIndex,
     required Offset pdfTapPoint,
@@ -2869,115 +3894,85 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     required double renderedPdfHeight,
   }) async {
     try {
-      // Convert screen pixels into PDF units so we can build a selection
-      // rectangle around the tap point. MuPDF's quad extractor returns quads
-      // that intersect the selection rect, so a zero-area rect (start == end)
-      // often produces 0 quads.
-      // Use a more generous tolerance (15 screen pixels) to improve text selection
-      // accuracy, especially for small text or when coordinates are slightly off.
-      final pdfPixelsPerScreenX = pageSize.width / renderedPdfWidth;
-      final pdfPixelsPerScreenY = pageSize.height / renderedPdfHeight;
-      final tolerancePdfX = 15.0 * pdfPixelsPerScreenX;
-      final tolerancePdfY = 15.0 * pdfPixelsPerScreenY;
-      // Use the larger tolerance to ensure we catch nearby words
-      final tolerance = math.max(tolerancePdfX, tolerancePdfY);
-      // Ensure minimum tolerance of at least 10 PDF units for very small text
-      final minTolerance = 10.0;
-      final finalTolerance = math.max(tolerance, minTolerance);
-
-      final start = Offset(
-        pdfTapPoint.dx - finalTolerance,
-        pdfTapPoint.dy - finalTolerance,
-      );
-      final end = Offset(
-        pdfTapPoint.dx + finalTolerance,
-        pdfTapPoint.dy + finalTolerance,
-      );
-
-      final jsonString = await MuPDFEditorService.getTextQuadsForSelection(
-        pdfPath,
-        pageIndex,
-        start,
-        end,
-      );
-
-      if (jsonString == null || jsonString.isEmpty) {
-        return null;
-      }
-
-      final quadsJson = jsonDecode(jsonString) as List;
-      if (quadsJson.isEmpty) {
-        return null;
-      }
-
-      final quads = quadsJson
-          .map((q) => TextQuad.fromJson(q as Map<String, dynamic>))
-          .toList();
-
-      print('_hitTestWordQuadAt: Found ${quads.length} quads for tap at PDF ($pdfTapPoint)');
+      // Use Java PDFBox implementation to get text at tap position
+      // PDFBox uses top-left origin (Y=0 at top), but PDF coordinates use bottom-left (Y=0 at bottom)
+      // Convert from bottom-left to top-left for PDFBox
+      final pdfBoxY = pageSize.height - pdfTapPoint.dy;
       
-      if (quads.isEmpty) {
-        print('_hitTestWordQuadAt: No quads found, returning null');
-        return null;
-      }
-
-      // Find the best quad: prefer quads that contain the tap point,
-      // and among those, pick the closest one
-      TextQuad? bestContaining;
-      double minContainingDistance = double.infinity;
+      print('_hitTestWordQuadAt: Calling PDFBox getTextAt at PDF ($pdfTapPoint), converted to PDFBox Y=$pdfBoxY');
       
-      // Use a more generous expansion for checking containment
-      // This helps when coordinates are slightly off due to rounding or scaling
-      final expandedTolerance = finalTolerance * 1.5;
-
-      for (final quad in quads) {
-        final expanded = quad.bounds.inflate(expandedTolerance);
-        if (expanded.contains(pdfTapPoint)) {
-          final distance = (quad.bounds.center - pdfTapPoint).distance;
-          if (bestContaining == null || distance < minContainingDistance) {
-            bestContaining = quad;
-            minContainingDistance = distance;
-          }
+      PDFInlineTextObject? textObject;
+      try {
+        textObject = await PDFInlineTextEditorService.getTextAt(
+          pdfPath,
+          pageIndex,
+          pdfTapPoint.dx,
+          pdfBoxY, // Convert to top-left origin for PDFBox
+        );
+      } catch (e) {
+        print('_hitTestWordQuadAt: Error calling PDFBox getTextAt: $e');
+        // If AWT classes are missing, return null gracefully instead of crashing
+        if (e.toString().contains('AWT') || e.toString().contains('NoClassDefFoundError')) {
+          print('_hitTestWordQuadAt: AWT classes missing - PDFBox not available on this device');
+          return null;
         }
+        rethrow;
       }
 
-      // If we found a quad containing the point, use it
-      if (bestContaining != null) {
-        print('_hitTestWordQuadAt: Selected containing quad "${bestContaining.text}"');
-        return bestContaining;
+      if (textObject == null) {
+        print('_hitTestWordQuadAt: No text object found at position');
+        return null;
       }
 
-      // Fallback: use nearest quad by center distance, but only if within reasonable range
-      // This prevents selecting text that's too far from the tap point
-      // Use a more adaptive distance: max of 10% page width or 3x tolerance
-      final maxDistance = math.max(pageSize.width * 0.1, finalTolerance * 3.0);
-      TextQuad? nearest;
-      double minDistance = double.infinity;
+      print('_hitTestWordQuadAt: Found text object "${textObject.text}" at (${textObject.x}, ${textObject.y}) [top-left origin]');
+
+      // Convert PDFInlineTextObject to TextQuad
+      // textObject coordinates are in top-left origin (Y=0 at top)
+      // TextQuad needs bottom-left origin (Y=0 at bottom) for PDF coordinate system
+      // textObject.y is distance from top, textObject.height is the height
+      final topY = textObject.y; // Already from top
+      final bottomY = textObject.y + textObject.height; // Bottom from top
       
-      for (final quad in quads) {
-        final distance = (quad.bounds.center - pdfTapPoint).distance;
-        if (distance < maxDistance && distance < minDistance) {
-          nearest = quad;
-          minDistance = distance;
-        }
+      // Convert to bottom-left origin for TextQuad
+      final quadTopY = pageSize.height - bottomY; // Top in bottom-left system
+      final quadBottomY = pageSize.height - topY; // Bottom in bottom-left system
+      
+      // Create quad corners from text object bounds (in bottom-left origin)
+      final topLeft = Offset(textObject.x, quadTopY);
+      final topRight = Offset(textObject.x + textObject.width, quadTopY);
+      final bottomLeft = Offset(textObject.x, quadBottomY);
+      final bottomRight = Offset(textObject.x + textObject.width, quadBottomY);
+
+      final quad = app_models.TextQuad(
+        topLeft: topLeft,
+        topRight: topRight,
+        bottomLeft: bottomLeft,
+        bottomRight: bottomRight,
+        pageIndex: pageIndex,
+        text: textObject.text,
+        objectId: textObject.objectId,
+      );
+
+      // Check if tap point is within the quad bounds (with some tolerance)
+      final tolerance = 20.0; // PDF units
+      final expandedBounds = quad.bounds.inflate(tolerance);
+      
+      if (expandedBounds.contains(pdfTapPoint)) {
+        print('_hitTestWordQuadAt: Selected text "${quad.text}" (tap point within bounds)');
+        return quad;
       }
+
+      // If tap point is close but not exactly within bounds, still return it
+      // (this handles coordinate rounding issues)
+      final distance = (quad.bounds.center - pdfTapPoint).distance;
+      final maxDistance = math.max(pageSize.width * 0.1, tolerance * 2.0);
       
-      if (nearest != null) {
-        print('_hitTestWordQuadAt: Selected nearest quad "${nearest.text}" (distance: ${minDistance.toStringAsFixed(2)})');
-        return nearest;
+      if (distance < maxDistance) {
+        print('_hitTestWordQuadAt: Selected text "${quad.text}" (distance: ${distance.toStringAsFixed(2)})');
+        return quad;
       }
-      
-      // Last resort: if no quad is within reasonable distance, return the absolute nearest
-      if (quads.isNotEmpty) {
-        final absoluteNearest = quads.reduce((a, b) {
-          final da = (a.bounds.center - pdfTapPoint).distance;
-          final db = (b.bounds.center - pdfTapPoint).distance;
-          return da <= db ? a : b;
-        });
-        print('_hitTestWordQuadAt: Selected absolute nearest quad "${absoluteNearest.text}" (last resort)');
-        return absoluteNearest;
-      }
-      
+
+      print('_hitTestWordQuadAt: Text found but too far from tap point (distance: ${distance.toStringAsFixed(2)})');
       return null;
     } catch (e) {
       print('Error in _hitTestWordQuadAt: $e');
@@ -2991,8 +3986,12 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   /// Update text content preview (UI only - doesn't save to PDF)
   /// Text is only saved when user clicks "Done"
   /// Optimized with debouncing to reduce setState calls
+  /// Now includes undo/redo support
   void _updateTextContentPreview(String newText) {
     if (_selectedPDFText == null) return;
+    
+    // Save current text to undo stack before making changes
+    _textEditorController.onTextChanged(_selectedPDFText!.text);
     
     // Cancel previous debounce timer
     _textPreviewDebounceTimer?.cancel();
@@ -3002,9 +4001,40 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       if (mounted && _selectedPDFText != null) {
         setState(() {
           _selectedPDFText = _selectedPDFText!.copyWith(text: newText);
+          // Update undo/redo state
+          _canUndoText = _textEditorController.canUndo;
+          _canRedoText = _textEditorController.canRedo;
         });
       }
     });
+  }
+  
+  /// Undo last text change
+  void _undoTextChange() {
+    if (!_textEditorController.canUndo || _selectedPDFText == null) return;
+    
+    final previousText = _textEditorController.undo();
+    if (previousText != null) {
+      setState(() {
+        _selectedPDFText = _selectedPDFText!.copyWith(text: previousText);
+        _canUndoText = _textEditorController.canUndo;
+        _canRedoText = _textEditorController.canRedo;
+      });
+    }
+  }
+  
+  /// Redo last undone text change
+  void _redoTextChange() {
+    if (!_textEditorController.canRedo || _selectedPDFText == null) return;
+    
+    final nextText = _textEditorController.redo();
+    if (nextText != null) {
+      setState(() {
+        _selectedPDFText = _selectedPDFText!.copyWith(text: nextText);
+        _canUndoText = _textEditorController.canUndo;
+        _canRedoText = _textEditorController.canRedo;
+      });
+    }
   }
   
   // Loading state for text save operation
@@ -3067,25 +4097,33 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       final pageIndex = _selectedPDFText!.pageIndex;
       
       print('_saveTextChangeToPDF: Attempting to replace text with objectId: ${_selectedPDFTextObjectId}');
+      print('_saveTextChangeToPDF: Old text: "${_selectedPDFText!.text}" -> New text: "$newText"');
       
-      // Try MuPDF first (faster than Syncfusion)
-      bool success = await MuPDFEditorService.replaceText(
+      // Get coordinates from selected text for fallback mechanism
+      double? x, y;
+      if (_selectedPDFText!.position != null) {
+        x = _selectedPDFText!.position!.dx;
+        y = _selectedPDFText!.position!.dy;
+        print('_saveTextChangeToPDF: Using coordinates for fallback: x=$x, y=$y');
+      }
+      
+      // Try Java iText service first (handles float coordinates in objectId)
+      // Pass coordinates for automatic fallback if objectId fails
+      print('_saveTextChangeToPDF: Calling PDFInlineTextEditorService.replaceText (iText)');
+      bool success = await PDFInlineTextEditorService.replaceText(
         pdfPath,
         pageIndex,
         _selectedPDFTextObjectId!,
         newText,
+        x: x,
+        y: y,
       );
       
       if (success) {
-        print('_saveTextChangeToPDF: MuPDF replacement successful, saving PDF');
-        // Save PDF (optimized - MuPDF is faster)
-        final saveSuccess = await MuPDFEditorService.savePdf(pdfPath);
-        if (!saveSuccess) {
-          print('_saveTextChangeToPDF: Warning - MuPDF save returned false');
-        }
+        print('_saveTextChangeToPDF: ✓ iText replacement successful!');
       } else {
-        // Fallback to Syncfusion if MuPDF fails
-        print('_saveTextChangeToPDF: MuPDF text replacement failed, trying Syncfusion fallback');
+        // Fallback to Syncfusion if iText fails
+        print('_saveTextChangeToPDF: ✗ iText replacement failed, trying Syncfusion fallback');
         success = await _replaceTextWithSyncfusion(newText);
       }
       
@@ -3256,6 +4294,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
   Future<void> _applyTextFormatting({
     bool? isBold,
     bool? isItalic,
+    bool? isUnderline,
     String? fontFamily,
     double? fontSize,
     Color? color,
@@ -3266,6 +4305,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
     final updatedText = _selectedPDFText!.copyWith(
       isBold: isBold ?? _selectedPDFText!.isBold,
       isItalic: isItalic ?? _selectedPDFText!.isItalic,
+      isUnderline: isUnderline ?? _selectedPDFText!.isUnderline,
       fontFamily: fontFamily ?? _selectedPDFText!.fontFamily,
       fontSize: fontSize ?? _selectedPDFText!.fontSize,
       color: color ?? _selectedPDFText!.color,
@@ -3473,6 +4513,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
               setState(() {
                 _isTextEditMode = false;
                 _selectedMode = 'none';
+                _isAddTextToolActive = false;
               });
             },
             child: Text(isEditing ? 'Update' : 'Add'),
@@ -3863,6 +4904,68 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
 }
 
 // Widget to display a single PDF page as thumbnail
+/// Custom painter to draw highlighted text overlays for edit mode
+class _EditableTextHighlightsPainter extends CustomPainter {
+  final List<PDFInlineTextObject> textObjects;
+  final int pageIndex;
+  final Size pageSize;
+  final double zoomLevel;
+  final double scrollOffsetY;
+  final double pageSpacing;
+  final Size viewerSize;
+  
+  _EditableTextHighlightsPainter({
+    required this.textObjects,
+    required this.pageIndex,
+    required this.pageSize,
+    required this.zoomLevel,
+    required this.scrollOffsetY,
+    required this.pageSpacing,
+    required this.viewerSize,
+  });
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Convert PDF coordinates to screen coordinates
+    final scaleX = viewerSize.width / pageSize.width;
+    final scaleY = (viewerSize.height / zoomLevel) / pageSize.height;
+    
+    // Highlight color (semi-transparent blue)
+    final highlightPaint = Paint()
+      ..color = const Color(0x330096FF) // Light blue with transparency
+      ..style = PaintingStyle.fill;
+    
+    // Border color
+    final borderPaint = Paint()
+      ..color = const Color(0x660096FF) // Slightly darker blue
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+    
+    for (final textObj in textObjects) {
+      if (textObj.pageIndex != pageIndex) continue;
+      
+      // Convert PDF coordinates (top-left origin) to screen coordinates
+      final screenX = textObj.x * scaleX;
+      final screenY = textObj.y * scaleY - scrollOffsetY;
+      final screenWidth = textObj.width * scaleX;
+      final screenHeight = textObj.height * scaleY;
+      
+      // Draw highlight rectangle
+      final rect = Rect.fromLTWH(screenX, screenY, screenWidth, screenHeight);
+      canvas.drawRect(rect, highlightPaint);
+      canvas.drawRect(rect, borderPaint);
+    }
+  }
+  
+  @override
+  bool shouldRepaint(_EditableTextHighlightsPainter oldDelegate) {
+    return oldDelegate.textObjects.length != textObjects.length ||
+           oldDelegate.zoomLevel != zoomLevel ||
+           oldDelegate.scrollOffsetY != scrollOffsetY ||
+           oldDelegate.pageIndex != pageIndex;
+  }
+}
+
 class _PDFThumbnailViewer extends StatefulWidget {
   final String filePath;
   final int pageNumber;
@@ -3936,6 +5039,63 @@ class _PDFThumbnailViewerState extends State<_PDFThumbnailViewer> {
               ),
             ),
     );
+  }
+}
+
+/// Controller for text editing undo/redo functionality
+class _TextEditorController {
+  final List<String> _undoStack = [];
+  final List<String> _redoStack = [];
+  String _currentText = '';
+
+  /// Call this method when the user makes a text change
+  void onTextChanged(String newText) {
+    if (newText != _currentText) {
+      _undoStack.add(_currentText);
+      _currentText = newText;
+      _redoStack.clear(); // Clear redo stack whenever a new change is made
+    }
+  }
+
+  /// Undo last change
+  String? undo() {
+    if (_undoStack.isEmpty) return null;
+    
+    _redoStack.add(_currentText);
+    _currentText = _undoStack.removeLast();
+    return _currentText;
+  }
+
+  /// Redo last undone change
+  String? redo() {
+    if (_redoStack.isEmpty) return null;
+    
+    _undoStack.add(_currentText);
+    _currentText = _redoStack.removeLast();
+    return _currentText;
+  }
+
+  /// Get current text
+  String get currentText => _currentText;
+
+  /// Check if undo is available
+  bool get canUndo => _undoStack.isNotEmpty;
+
+  /// Check if redo is available
+  bool get canRedo => _redoStack.isNotEmpty;
+
+  /// Clear all history
+  void clear() {
+    _undoStack.clear();
+    _redoStack.clear();
+    _currentText = '';
+  }
+
+  /// Set initial text
+  void setInitialText(String text) {
+    _currentText = text;
+    _undoStack.clear();
+    _redoStack.clear();
   }
 }
 

@@ -3328,117 +3328,145 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
       return;
     }
     
+    sf.PdfDocument? document;
     try {
       // Show loading
-      showDialog(
-        context: context,
-        barrierDismissible: false,
-        builder: (context) => const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const Center(
+            child: CircularProgressIndicator(),
+          ),
+        );
+      }
       
       // Get PDF page size and convert screen position to PDF coordinates
       final file = File(_actualFilePath ?? widget.filePath);
-      final bytes = await file.readAsBytes();
-      final document = sf.PdfDocument(inputBytes: bytes);
-      
-      if (_currentPage - 1 >= 0 && _currentPage - 1 < document.pages.count) {
-        final page = document.pages[_currentPage - 1];
-        final pageSize = page.size;
-        final screenSize = MediaQuery.of(context).size;
-        
-        // Convert screen position to PDF coordinates
-        // Syncfusion PDF viewer renders pages scaled to fit screen width
-        // We need to account for scroll offset and calculate which page we're on
-        
-        // Calculate rendered PDF dimensions
-        // PDF is scaled to fit screen width, height scales proportionally
-        final pdfAspectRatio = pageSize.height / pageSize.width;
-        final renderedPdfWidth = screenSize.width;
-        final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
-        
-        // Account for scroll - screen position is relative to visible viewport
-        final absoluteDocumentY = screenPosition.dy + _pdfScrollOffsetY;
-        
-        // Calculate which page this position belongs to (for multi-page vertical scroll)
-        final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
-        final pageStartY = pageIndex * renderedPdfHeight;
-        final relativeYInPage = absoluteDocumentY - pageStartY;
-        
-        // Convert to PDF page coordinates (points, not pixels)
-        // X: screen X position maps directly to PDF X (both scale with width)
-        final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
-        // Y: relative position in page maps to PDF Y
-        final pdfY = (relativeYInPage / renderedPdfHeight) * pageSize.height;
-        
-        // Clamp to page bounds
-        final clampedX = pdfX.clamp(0.0, pageSize.width);
-        final clampedY = pdfY.clamp(0.0, pageSize.height);
-        
-        // Add text to PDF
-        final graphics = page.graphics;
-        final font = sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 12);
-        final brush = sf.PdfSolidBrush(sf.PdfColor(
-          _selectedColor.red,
-          _selectedColor.green,
-          _selectedColor.blue,
-        ));
-        
-        final stringFormat = sf.PdfStringFormat();
-        stringFormat.alignment = sf.PdfTextAlignment.left;
-        stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
-        
-        graphics.drawString(
-          text,
-          font,
-          brush: brush,
-          format: stringFormat,
-          bounds: Rect.fromLTWH(
-            clampedX,
-            clampedY,
-            pageSize.width - clampedX,
-            100, // Allow multi-line text
-          ),
-        );
-        
-        // Save PDF
-        final modifiedBytes = await document.save();
-        await file.writeAsBytes(modifiedBytes);
-        document.dispose();
-        
-        // Don't reload PDF immediately - it causes hangs
-        if (mounted) {
-          Navigator.pop(context); // Close loading
-          setState(() {
-            // Changes will be visible when PDF is reopened or when exiting edit mode
-            _isTextEditMode = false;
-            _selectedMode = 'none';
-          });
-          
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Text added to PDF'),
-              backgroundColor: Colors.green,
-              duration: Duration(seconds: 2),
-            ),
-          );
-        }
-      } else {
-        document.dispose();
-        if (mounted) {
-          Navigator.pop(context);
-        }
+      if (!await file.exists()) {
+        throw Exception('PDF file not found');
       }
-    } catch (e) {
+      
+      final bytes = await file.readAsBytes();
+      if (bytes.isEmpty) {
+        throw Exception('PDF file is empty');
+      }
+      
+      document = sf.PdfDocument(inputBytes: bytes);
+      
+      if (document == null) {
+        throw Exception('Failed to load PDF document');
+      }
+      
+      if (_currentPage - 1 < 0 || _currentPage - 1 >= document.pages.count) {
+        throw Exception('Invalid page number: $_currentPage');
+      }
+      
+      final page = document.pages[_currentPage - 1];
+      final pageSize = page.size;
+      final screenSize = MediaQuery.of(context).size;
+      
+      // Convert screen position to PDF coordinates
+      // Syncfusion PDF viewer renders pages scaled to fit screen width
+      // We need to account for scroll offset and calculate which page we're on
+      
+      // Calculate rendered PDF dimensions
+      // PDF is scaled to fit screen width, height scales proportionally
+      final pdfAspectRatio = pageSize.height / pageSize.width;
+      final renderedPdfWidth = screenSize.width;
+      final renderedPdfHeight = renderedPdfWidth * pdfAspectRatio;
+      
+      // Account for scroll - screen position is relative to visible viewport
+      final absoluteDocumentY = screenPosition.dy + _pdfScrollOffsetY;
+      
+      // Calculate which page this position belongs to (for multi-page vertical scroll)
+      final pageIndex = (absoluteDocumentY / renderedPdfHeight).floor();
+      final pageStartY = pageIndex * renderedPdfHeight;
+      final relativeYInPage = absoluteDocumentY - pageStartY;
+      
+      // Convert to PDF page coordinates (points, not pixels)
+      // X: screen X position maps directly to PDF X (both scale with width)
+      final pdfX = (screenPosition.dx / renderedPdfWidth) * pageSize.width;
+      // Y: relative position in page maps to PDF Y
+      final pdfY = (relativeYInPage / renderedPdfHeight) * pageSize.height;
+      
+      // Clamp to page bounds
+      final clampedX = pdfX.clamp(0.0, pageSize.width);
+      final clampedY = pdfY.clamp(0.0, pageSize.height);
+      
+      // Add text to PDF
+      final graphics = page.graphics;
+      final font = sf.PdfStandardFont(sf.PdfFontFamily.helvetica, 12);
+      final brush = sf.PdfSolidBrush(sf.PdfColor(
+        _selectedColor.red,
+        _selectedColor.green,
+        _selectedColor.blue,
+      ));
+      
+      final stringFormat = sf.PdfStringFormat();
+      stringFormat.alignment = sf.PdfTextAlignment.left;
+      stringFormat.lineAlignment = sf.PdfVerticalAlignment.top;
+      
+      graphics.drawString(
+        text,
+        font,
+        brush: brush,
+        format: stringFormat,
+        bounds: Rect.fromLTWH(
+          clampedX,
+          clampedY,
+          pageSize.width - clampedX,
+          100, // Allow multi-line text
+        ),
+      );
+      
+      // Save PDF
+      final modifiedBytes = await document.save();
+      if (modifiedBytes.isEmpty) {
+        throw Exception('Failed to save PDF - returned empty bytes');
+      }
+      
+      await file.writeAsBytes(modifiedBytes);
+      
+      // Close loading dialog
       if (mounted) {
         Navigator.pop(context);
+        
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Text added to PDF successfully'),
+            backgroundColor: Colors.green,
+            duration: Duration(seconds: 2),
+          ),
+        );
+      }
+    } catch (e) {
+      print('Error adding text to PDF: $e');
+      print('Stack trace: ${StackTrace.current}');
+      
+      if (mounted) {
+        try {
+          Navigator.pop(context); // Try to close loading dialog
+        } catch (_) {
+          // Ignore if context is no longer valid
+        }
+        
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Error adding text: $e'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 3),
           ),
         );
+      }
+    } finally {
+      // Always dispose document
+      if (document != null) {
+        try {
+          document.dispose();
+        } catch (e) {
+          print('Error disposing document: $e');
+        }
       }
     }
   }
@@ -4466,7 +4494,7 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
             child: const Text('Cancel'),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               final newText = textController.text.trim();
               
               // Validate: don't allow empty text when adding new
@@ -4506,15 +4534,29 @@ class _PDFViewerScreenState extends State<PDFViewerScreen> {
                 }
               } else {
                 // Add new text directly to PDF (true content editing)
-                _addTextToPDF(newText, position);
+                try {
+                  await _addTextToPDF(newText, position);
+                } catch (e) {
+                  print('Error adding text: $e');
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Error: $e'),
+                        backgroundColor: Colors.red,
+                      ),
+                    );
+                  }
+                }
               }
               
               // Reset text edit mode
-              setState(() {
-                _isTextEditMode = false;
-                _selectedMode = 'none';
-                _isAddTextToolActive = false;
-              });
+              if (mounted) {
+                setState(() {
+                  _isTextEditMode = false;
+                  _selectedMode = 'none';
+                  _isAddTextToolActive = false;
+                });
+              }
             },
             child: Text(isEditing ? 'Update' : 'Add'),
           ),

@@ -78,15 +78,24 @@ class PDFTextEditorService {
     Offset position,
     {Color? color, double? fontSize}
   ) async {
+    sf.PdfDocument? document;
     try {
       final file = File(pdfPath);
-      if (!await file.exists()) return false;
+      if (!await file.exists()) {
+        print('PDF file does not exist: $pdfPath');
+        return false;
+      }
 
       final bytes = await file.readAsBytes();
-      final document = sf.PdfDocument(inputBytes: bytes);
+      if (bytes.isEmpty) {
+        print('PDF file is empty: $pdfPath');
+        return false;
+      }
+
+      document = sf.PdfDocument(inputBytes: bytes);
       
       if (pageIndex < 0 || pageIndex >= document.pages.count) {
-        document.dispose();
+        print('Invalid page index: $pageIndex, total pages: ${document.pages.count}');
         return false;
       }
 
@@ -134,13 +143,27 @@ class PDFTextEditorService {
       
       // Save the modified PDF
       final modifiedBytes = await document.save();
-      await file.writeAsBytes(modifiedBytes);
+      if (modifiedBytes.isEmpty) {
+        print('Failed to save PDF - returned empty bytes');
+        return false;
+      }
       
-      document.dispose();
+      await file.writeAsBytes(modifiedBytes);
+      print('Successfully added text to PDF: $pdfPath');
       return true;
     } catch (e) {
       print('Error adding text to PDF: $e');
+      print('Stack trace: ${StackTrace.current}');
       return false;
+    } finally {
+      // Always dispose document
+      if (document != null) {
+        try {
+          document.dispose();
+        } catch (e) {
+          print('Error disposing document: $e');
+        }
+      }
     }
   }
 }
